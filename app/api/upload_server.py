@@ -11,6 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from app.integrations.google_service import GoogleExhibitionService
 from app.integrations.google_drive_uploader import GoogleDriveUploader
 from app.utils.logger import logger
