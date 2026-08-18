@@ -1,1 +1,1 @@
-"""Service pipeline module."""
+# app.services package marker
