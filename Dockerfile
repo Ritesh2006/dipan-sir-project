@@ -9,9 +9,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Set Python Path so `app` module imports succeed cleanly on Render
+# Set Python Path & Environment Variables so uploads succeed on Render
 ENV PYTHONPATH=/app
 ENV PORT=8080
+ENV TARGET_DRIVE_FOLDER_ID=1aaD44uttnMpWdLo19tko-8Ipl3_MUhbk
+ENV GOOGLE_APPS_SCRIPT_URL=https://script.google.com/macros/s/AKfycbwzV4dCMkXfNYM2bxGHMe1l_I5n72-GMfccyAuyoEhSq_cYGnhVjU3Ql-PNOxStNyEs/exec
 
 # Copy requirements & install dependencies
 COPY requirements.txt .

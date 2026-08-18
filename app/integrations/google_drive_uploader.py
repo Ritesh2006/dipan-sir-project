@@ -24,6 +24,7 @@ import urllib.request
 # Target Google Drive Base URL & Folder ID
 TARGET_DRIVE_BASE_URL = settings.GOOGLE_DRIVE_BASE_URL
 TARGET_DRIVE_FOLDER_ID = settings.GOOGLE_DRIVE_FOLDER_ID
+DEFAULT_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwzV4dCMkXfNYM2bxGHMe1l_I5n72-GMfccyAuyoEhSq_cYGnhVjU3Ql-PNOxStNyEs/exec"
 
 # Local Backup & Sync Directory
 LOCAL_DRIVE_DIR = settings.BASE_DIR / "data" / "drive_uploads" / TARGET_DRIVE_FOLDER_ID
@@ -144,8 +145,8 @@ class GoogleDriveUploader:
             except Exception as err:
                 logger.warning(f"Google Drive API upload notice for '{target_file.name}': {err}")
 
-        # 2. Try Google Apps Script Web App if configured
-        script_url = settings.GOOGLE_APPS_SCRIPT_URL or os.getenv("GOOGLE_APPS_SCRIPT_URL", "")
+        # 2. Try Google Apps Script Web App for Direct Drive File Creation
+        script_url = settings.GOOGLE_APPS_SCRIPT_URL or os.getenv("GOOGLE_APPS_SCRIPT_URL") or DEFAULT_APPS_SCRIPT_URL
         if script_url:
             script_link = cls._upload_via_apps_script(script_url, target_file, TARGET_DRIVE_FOLDER_ID)
             if script_link:
