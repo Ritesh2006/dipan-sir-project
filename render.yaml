@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: exhibition-voice-logger-backend
+    env: docker
+    plan: free
+    region: singapore
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: TARGET_DRIVE_FOLDER_ID
+        value: 1aaD44uttnMpWdLo19tko-8Ipl3_MUhbk

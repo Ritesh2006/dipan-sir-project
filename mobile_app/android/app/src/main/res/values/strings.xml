@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">VoiceLogger</string>
+    <string name="title_activity_main">VoiceLogger</string>
+    <string name="package_name">com.voicelogger.offline</string>
+    <string name="custom_url_scheme">com.voicelogger.offline</string>
+</resources>

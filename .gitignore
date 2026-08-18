@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+.pytest_cache/
+
+# Environment / Local settings
+.env
+
+# Data & Logs
+data/database/*.db
+data/exports/*.xlsx
+data/logs/*.log
+!data/**/.gitkeep
+
+# Models directory binaries
+models/*
+!models/.gitkeep
+
+# PyInstaller / Build outputs
+build/
+dist/
+*.spec
+
+# macOS
+.DS_Store

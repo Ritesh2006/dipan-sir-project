@@ -1,0 +1,9 @@
+{
+  "appId": "com.voicelogger.offline",
+  "appName": "VoiceLogger",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  }
+}
