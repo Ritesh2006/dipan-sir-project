@@ -26,5 +26,9 @@ build/
 dist/
 *.spec
 
+# Node
+node_modules/
+mobile_app/node_modules/
+
 # macOS
 .DS_Store

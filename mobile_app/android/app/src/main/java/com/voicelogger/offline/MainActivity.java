@@ -28,5 +28,17 @@ public class MainActivity extends BridgeActivity {
                 }
             });
         }
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            String[] permissions = {
+                android.Manifest.permission.RECORD_AUDIO,
+                android.Manifest.permission.CAMERA,
+                android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            };
+            try {
+                requestPermissions(permissions, 1001);
+            } catch (Exception e) {}
+        }
     }
 }

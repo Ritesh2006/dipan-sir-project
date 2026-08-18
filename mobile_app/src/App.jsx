@@ -21,6 +21,7 @@ export default function App() {
   const [records, setRecords] = useState([]);
   const [counter, setCounter] = useState({ STALL: 1, SCIENCE: 1, LECTURE: 1 });
   const [serverIp, setServerIp] = useState(() => localStorage.getItem('SERVER_IP') || '172.28.36.209');
+  const [syncNotice, setSyncNotice] = useState(null);
 
   const UPLOAD_API_URL = `http://${serverIp}:8080/api/upload`;
 
@@ -60,6 +61,69 @@ export default function App() {
   const recognitionRef = useRef(null);
   const nativeListenersRef = useRef([]);
 
+  // Automatic Background Offline-to-Google-Drive Auto-Sync Engine
+  const syncPendingRecordsToDrive = async () => {
+    try {
+      const allDBRecords = await getAllRecordsFromDB();
+      if (!allDBRecords || allDBRecords.length === 0) return;
+
+      const pendingList = allDBRecords.filter(r => r.syncStatus === 'PENDING_DRIVE_SYNC' || r["Verification Status"] === 'Saved Offline & Ready');
+      if (pendingList.length === 0) return;
+
+      let syncedCount = 0;
+      for (const rec of pendingList) {
+        try {
+          const subId = rec["Submission ID"];
+          const sheetName = rec._sheetName || 'Stall Data';
+          const activeTab = rec._activeTab || 'STALL';
+
+          const uploadResp = await fetch(UPLOAD_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              submission_id: subId,
+              active_tab: activeTab,
+              sheet_name: sheetName,
+              row_data: rec,
+              audio_base64: rec._audioBase64 || null,
+              image_base64: rec._imageBase64 || null,
+              image_name: rec._imageName || 'photo.jpg',
+              brochure_base64: rec._brochureBase64 || null,
+              brochure_name: rec._brochureName || 'brochure.pdf'
+            })
+          });
+
+          if (uploadResp.ok) {
+            const serverRes = await uploadResp.json();
+            rec.syncStatus = 'VERIFIED_AND_SYNCED';
+            rec["Verification Status"] = 'Verified & Synced to Google Drive ✓';
+            if (serverRes && serverRes.transcript) {
+              rec["Transcript"] = serverRes.transcript;
+            }
+            if (serverRes && serverRes.drive_links) {
+              if (serverRes.drive_links["Audio Drive Link"]) rec["Audio Drive Link"] = serverRes.drive_links["Audio Drive Link"];
+              if (serverRes.drive_links["Image Drive Link"]) rec["Image Drive Link"] = serverRes.drive_links["Image Drive Link"];
+              if (serverRes.drive_links["Brochure Drive Link"]) rec["Brochure Drive Link"] = serverRes.drive_links["Brochure Drive Link"];
+            }
+            await saveRecordToDB(rec);
+            syncedCount++;
+          }
+        } catch (singleErr) {
+          console.warn("Single record sync notice:", singleErr);
+        }
+      }
+
+      if (syncedCount > 0) {
+        const updatedRecords = await getAllRecordsFromDB();
+        setRecords(updatedRecords);
+        setSyncNotice(`Auto-Synced ${syncedCount} offline record(s) to Google Drive! ✓`);
+        setTimeout(() => setSyncNotice(null), 6000);
+      }
+    } catch (err) {
+      console.warn("Background Drive Sync notice:", err);
+    }
+  };
+
   useEffect(() => {
     getAllRecordsFromDB().then((dbRecords) => {
       if (dbRecords && dbRecords.length > 0) {
@@ -70,7 +134,24 @@ export default function App() {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(err => console.error("SW reg error:", err));
     }
-  }, []);
+
+    // Trigger initial background sync
+    syncPendingRecordsToDrive();
+
+    const handleOnline = () => {
+      syncPendingRecordsToDrive();
+    };
+
+    window.addEventListener('online', handleOnline);
+    const syncInterval = setInterval(() => {
+      syncPendingRecordsToDrive();
+    }, 8000);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      clearInterval(syncInterval);
+    };
+  }, [serverIp]);
 
   const [speechLang, setSpeechLang] = useState('bn-IN'); // Default: Bengali (bn-IN) / English / Hindi
 
@@ -315,7 +396,7 @@ export default function App() {
     }
 
     if (!finalTranscript && !liveTranscript) {
-      const defaultVoiceText = `Voice byte recorded (${speechLang === 'bn-IN' ? 'বাংলা' : speechLang}) - ready for Whisper transcription`;
+      const defaultVoiceText = `Voice byte recorded (${speechLang === 'bn-IN' ? 'বাংলা' : speechLang}) - saved offline`;
       setFinalTranscript(defaultVoiceText);
     }
 
@@ -360,7 +441,21 @@ export default function App() {
     let rowData = {};
     let sheetName = 'Stall Data';
 
-    const fullText = (finalTranscript + ' ' + liveTranscript).trim() || 'Recorded audio byte stored locally & synced to Google Drive';
+    const fullText = (finalTranscript + ' ' + liveTranscript).trim() || 'Recorded audio byte stored locally & ready for Drive sync';
+
+    let audioB64 = null;
+    let imageB64 = null;
+    let brochureB64 = null;
+
+    if (audioBlob) {
+      try { audioB64 = await blobToBase64(audioBlob); } catch (e) {}
+    }
+    if (imageFile) {
+      try { imageB64 = await blobToBase64(imageFile); } catch (e) {}
+    }
+    if (brochureFile) {
+      try { brochureB64 = await blobToBase64(brochureFile); } catch (e) {}
+    }
 
     if (activeTab === 'STALL') {
       const stallName = stallForm.stallName.trim() || `Stall ${counter.STALL}`;
@@ -384,7 +479,15 @@ export default function App() {
         "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo_${subId}_${imageFile.name}` : 'N/A',
         "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure_${subId}_${brochureFile.name}` : 'N/A',
         "Transcript": fullText,
-        "Verification Status": "Saved Offline & Ready"
+        "Verification Status": "Saved Offline & Ready",
+        syncStatus: "PENDING_DRIVE_SYNC",
+        _sheetName: sheetName,
+        _activeTab: activeTab,
+        _audioBase64: audioB64,
+        _imageBase64: imageB64,
+        _imageName: imageFile ? imageFile.name : 'photo.jpg',
+        _brochureBase64: brochureB64,
+        _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf'
       };
 
       setStallForm({ stallName: '', stallNo: '', organization: '', category: '', person: '', designation: '' });
@@ -410,7 +513,15 @@ export default function App() {
         "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo_${subId}_${imageFile.name}` : 'N/A',
         "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure_${subId}_${brochureFile.name}` : 'N/A',
         "Transcript": fullText,
-        "Verification Status": "Saved Offline & Ready"
+        "Verification Status": "Saved Offline & Ready",
+        syncStatus: "PENDING_DRIVE_SYNC",
+        _sheetName: sheetName,
+        _activeTab: activeTab,
+        _audioBase64: audioB64,
+        _imageBase64: imageB64,
+        _imageName: imageFile ? imageFile.name : 'photo.jpg',
+        _brochureBase64: brochureB64,
+        _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf'
       };
 
       setSciForm({ exhibitName: '', stallNo: '', organization: '', category: '', presenter: '', designationClass: '' });
@@ -435,68 +546,28 @@ export default function App() {
         "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo_${subId}_${imageFile.name}` : 'N/A',
         "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure_${subId}_${brochureFile.name}` : 'N/A',
         "Transcript": fullText,
-        "Verification Status": "Saved Offline & Ready"
+        "Verification Status": "Saved Offline & Ready",
+        syncStatus: "PENDING_DRIVE_SYNC",
+        _sheetName: sheetName,
+        _activeTab: activeTab,
+        _audioBase64: audioB64,
+        _imageBase64: imageB64,
+        _imageName: imageFile ? imageFile.name : 'photo.jpg',
+        _brochureBase64: brochureB64,
+        _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf'
       };
 
       setLecForm({ lectureTitle: '', speaker: '', designation: '', organization: '', topicCategory: '', dateTime: '' });
     }
 
-    // Save 1 row immediately to IndexedDB
+    // Save 1 row immediately to IndexedDB (Works 100% Offline!)
     await saveRecordToDB(rowData);
     let updated = await getAllRecordsFromDB();
     setRecords(updated);
-    setStatus('Saved');
+    setStatus('Saved Offline');
 
-    // Convert media to base64 & post directly to Google Drive upload server
-    try {
-      let audioB64 = null;
-      let imageB64 = null;
-      let brochureB64 = null;
-
-      if (audioBlob) {
-        audioB64 = await blobToBase64(audioBlob);
-      }
-      if (imageFile) {
-        imageB64 = await blobToBase64(imageFile);
-      }
-      if (brochureFile) {
-        brochureB64 = await blobToBase64(brochureFile);
-      }
-
-      const uploadResp = await fetch(UPLOAD_API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          submission_id: subId,
-          active_tab: activeTab,
-          sheet_name: sheetName,
-          row_data: rowData,
-          audio_base64: audioB64,
-          image_base64: imageB64,
-          image_name: imageFile ? imageFile.name : 'photo.jpg',
-          brochure_base64: brochureB64,
-          brochure_name: brochureFile ? brochureFile.name : 'brochure.pdf'
-        })
-      });
-
-      const serverRes = await uploadResp.json();
-      if (serverRes && serverRes.transcript) {
-        rowData["Transcript"] = serverRes.transcript;
-      }
-      if (serverRes && serverRes.drive_links) {
-        if (serverRes.drive_links["Audio Drive Link"]) rowData["Audio Drive Link"] = serverRes.drive_links["Audio Drive Link"];
-        if (serverRes.drive_links["Image Drive Link"]) rowData["Image Drive Link"] = serverRes.drive_links["Image Drive Link"];
-        if (serverRes.drive_links["Brochure Drive Link"]) rowData["Brochure Drive Link"] = serverRes.drive_links["Brochure Drive Link"];
-      }
-    } catch (err) {
-      console.warn("Google Drive Upload Server notice:", err);
-    }
-
-    rowData["Verification Status"] = "Verified & Synced";
-    await saveRecordToDB(rowData);
-    updated = await getAllRecordsFromDB();
-    setRecords(updated);
-    setStatus('Ready');
+    // Trigger immediate background sync attempt to Google Drive
+    syncPendingRecordsToDrive();
 
     // Reset media
     setImageFile(null);
@@ -506,7 +577,7 @@ export default function App() {
     setAudioBlob(null);
     setLiveTranscript('');
     setFinalTranscript('');
-    alert(`Submission Successful!\nID: ${subId}\n1 Row created & files uploaded to Google Drive Folder!`);
+    alert(`Saved 100% Offline!\nID: ${subId}\nRecord stored locally & will auto-sync to Google Drive as soon as internet is connected!`);
   };
 
   const handleExportExcel = () => {
@@ -535,6 +606,19 @@ export default function App() {
       />
 
       <main className="flex-1 max-w-md mx-auto w-full px-4 pt-3 space-y-3.5">
+        {/* Background Drive Sync Banner Notification */}
+        {syncNotice && (
+          <div className="bg-emerald-600 text-white rounded-2xl p-3 shadow-md flex items-center justify-between text-xs font-black animate-bounce">
+            <div className="flex items-center space-x-2">
+              <Upload className="w-4 h-4 animate-spin" />
+              <span>{syncNotice}</span>
+            </div>
+            <button type="button" onClick={() => setSyncNotice(null)} className="text-emerald-100 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Target Google Drive Folder Banner */}
         <div className="bg-white border-2 border-emerald-300 rounded-2xl p-3 shadow-xs flex items-center justify-between">
           <div className="flex items-center space-x-2">
@@ -768,7 +852,7 @@ export default function App() {
             className="w-full py-3 bg-gradient-to-r from-orange-600 via-amber-600 to-emerald-600 hover:from-orange-500 hover:to-emerald-500 text-white font-black text-xs rounded-xl shadow-lg shadow-orange-600/20 flex items-center justify-center space-x-2 active:scale-98 transition-all"
           >
             <Send className="w-4 h-4" />
-            <span>SUBMIT ENTRY (CREATE 1 ROW & SYNC DRIVE)</span>
+            <span>SUBMIT ENTRY (AUTO-SYNC DRIVE WHEN ONLINE)</span>
           </button>
         </form>
 
