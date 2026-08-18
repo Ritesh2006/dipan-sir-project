@@ -23,6 +23,9 @@ export default function App() {
   const [serverIp, setServerIp] = useState(() => localStorage.getItem('SERVER_IP') || 'exhibition-voice-logger-backend.onrender.com');
   const [syncNotice, setSyncNotice] = useState(null);
 
+  const isListeningRef = useRef(false);
+  isListeningRef.current = isListening;
+
   const UPLOAD_API_URL = serverIp.includes('onrender.com') || serverIp.startsWith('http://') || serverIp.startsWith('https://')
     ? (serverIp.startsWith('http') ? `${serverIp.replace(/\/$/, '')}/api/upload` : `https://${serverIp.replace(/\/$/, '')}/api/upload`)
     : `http://${serverIp}:8080/api/upload`;
@@ -186,7 +189,7 @@ export default function App() {
       lower.includes('শুরু') ||
       lower.includes('স্টার্টিং')
     ) {
-      if (!isListening) {
+      if (!isListeningRef.current) {
         if (wakeRecognitionRef.current) {
           try { wakeRecognitionRef.current.stop(); } catch (e) {}
         }
@@ -197,11 +200,13 @@ export default function App() {
 
   // Continuous Background Wake-Word Listener Effect for Web & Android
   useEffect(() => {
-    let nativeWakeTimer = null;
+    let isCancelled = false;
+    let wakeRetryTimeout = null;
 
     if (Capacitor.isNativePlatform() || Capacitor.getPlatform() === 'android') {
       if (!isListening) {
-        const startNativeWakeWord = async () => {
+        const loopNativeWake = async () => {
+          if (isCancelled || isListeningRef.current) return;
           try {
             nativeListenersRef.current.forEach(l => l.remove());
             nativeListenersRef.current = [];
@@ -211,14 +216,23 @@ export default function App() {
                 detectVoiceCommand(data.transcript);
               }
             });
-            nativeListenersRef.current = [wakeListener];
+
+            const errorListener = await NativeSpeech.addListener('onSpeechError', () => {
+              if (!isCancelled && !isListeningRef.current) {
+                wakeRetryTimeout = setTimeout(loopNativeWake, 800);
+              }
+            });
+
+            nativeListenersRef.current = [wakeListener, errorListener];
             await NativeSpeech.startListening({ language: speechLang });
           } catch (e) {
-            console.warn("Native wake listener notice:", e);
+            if (!isCancelled && !isListeningRef.current) {
+              wakeRetryTimeout = setTimeout(loopNativeWake, 1200);
+            }
           }
         };
 
-        startNativeWakeWord();
+        loopNativeWake();
       }
     } else {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -239,7 +253,7 @@ export default function App() {
           };
 
           wakeRecognition.onend = () => {
-            if (!isListening && wakeRecognitionRef.current === wakeRecognition) {
+            if (!isListeningRef.current && wakeRecognitionRef.current === wakeRecognition) {
               try { wakeRecognition.start(); } catch (e) {}
             }
           };
@@ -253,7 +267,8 @@ export default function App() {
     }
 
     return () => {
-      if (nativeWakeTimer) clearInterval(nativeWakeTimer);
+      isCancelled = true;
+      if (wakeRetryTimeout) clearTimeout(wakeRetryTimeout);
     };
   }, [isListening, speechLang]);
 
@@ -327,6 +342,11 @@ export default function App() {
             if (data.isFinal) {
               setFinalTranscript(prev => (prev ? prev.trim() + ' ' + data.transcript.trim() : data.transcript.trim()));
               setLiveTranscript('');
+              setTimeout(() => {
+                if (isListeningRef.current) {
+                  NativeSpeech.startListening({ language: speechLang }).catch(() => {});
+                }
+              }, 300);
             } else {
               setLiveTranscript(data.transcript);
             }
@@ -336,6 +356,11 @@ export default function App() {
 
         const errorListener = await NativeSpeech.addListener('onSpeechError', (err) => {
           console.warn("NativeSpeech notice:", err);
+          setTimeout(() => {
+            if (isListeningRef.current) {
+              NativeSpeech.startListening({ language: speechLang }).catch(() => {});
+            }
+          }, 400);
         });
 
         nativeListenersRef.current = [resultListener, errorListener];
@@ -704,7 +729,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={startListening}
-                className="w-16 h-16 rounded-full bg-gradient-to-tr from-orange-500 via-amber-500 to-emerald-600 text-white flex items-center justify-center shadow-lg shadow-orange-500/30 transform active:scale-95 transition-all"
+                className="w-16 h-16 rounded-full bg-gradient-to-tr from-orange-500 via-amber-500 to-emerald-600 text-white flex items-center justify-center shadow-lg shadow-orange-500/30 transform active:scale-95 transition-all cursor-pointer"
               >
                 <Mic className="w-8 h-8" />
               </button>
@@ -712,7 +737,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={stopListening}
-                className="w-16 h-16 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-lg shadow-rose-600/30 animate-pulse transform active:scale-95 transition-all"
+                className="w-16 h-16 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-lg shadow-rose-600/30 animate-pulse transform active:scale-95 transition-all cursor-pointer"
               >
                 <Square className="w-7 h-7 fill-current" />
               </button>

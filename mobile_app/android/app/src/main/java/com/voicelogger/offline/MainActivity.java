@@ -37,17 +37,34 @@ public class MainActivity extends BridgeActivity {
                 @Override
                 public boolean onShowFileChooser(android.webkit.WebView webView, ValueCallback<Uri[]> filePathCallback, WebChromeClient.FileChooserParams fileChooserParams) {
                     if (MainActivity.filePathCallback != null) {
-                        MainActivity.filePathCallback.onReceiveValue(null);
+                        try {
+                            MainActivity.filePathCallback.onReceiveValue(null);
+                        } catch (Exception e) {}
                     }
                     MainActivity.filePathCallback = filePathCallback;
-                    Intent intent = fileChooserParams.createIntent();
+
+                    Intent intent = null;
+                    if (fileChooserParams != null) {
+                        try {
+                            intent = fileChooserParams.createIntent();
+                        } catch (Exception e) {}
+                    }
+                    if (intent == null) {
+                        intent = new Intent(Intent.ACTION_GET_CONTENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        intent.setType("*/*");
+                    }
+
                     try {
-                        startActivityForResult(intent, FILECHOOSER_RESULTCODE);
+                        startActivityForResult(Intent.createChooser(intent, "Choose Photo or Document"), FILECHOOSER_RESULTCODE);
+                        return true;
                     } catch (Exception e) {
-                        MainActivity.filePathCallback = null;
+                        if (MainActivity.filePathCallback != null) {
+                            MainActivity.filePathCallback.onReceiveValue(null);
+                            MainActivity.filePathCallback = null;
+                        }
                         return false;
                     }
-                    return true;
                 }
             });
         }
@@ -83,7 +100,9 @@ public class MainActivity extends BridgeActivity {
                     }
                 }
             }
-            filePathCallback.onReceiveValue(results);
+            try {
+                filePathCallback.onReceiveValue(results);
+            } catch (Exception e) {}
             filePathCallback = null;
         }
     }
