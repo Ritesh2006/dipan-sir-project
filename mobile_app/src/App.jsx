@@ -32,18 +32,6 @@ export default function App() {
     try { localStorage.setItem('SERVER_IP', newIp); } catch (e) {}
   };
 
-  // Media Pickers refs
-  const photoInputRef = useRef(null);
-  const brochureInputRef = useRef(null);
-
-  const triggerPhotoPicker = () => {
-    if (photoInputRef.current) photoInputRef.current.click();
-  };
-
-  const triggerBrochurePicker = () => {
-    if (brochureInputRef.current) brochureInputRef.current.click();
-  };
-
   // Recorded Audio state
   const [audioUrl, setAudioUrl] = useState(null);
   const [audioBlob, setAudioBlob] = useState(null);
@@ -77,14 +65,14 @@ export default function App() {
         try {
           const subId = rec["Submission ID"];
           const sheetName = rec._sheetName || 'Stall Data';
-          const activeTab = rec._activeTab || 'STALL';
+          const activeTabName = rec._activeTab || 'STALL';
 
           const uploadResp = await fetch(UPLOAD_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               submission_id: subId,
-              active_tab: activeTab,
+              active_tab: activeTabName,
               sheet_name: sheetName,
               row_data: rec,
               audio_base64: rec._audioBase64 || null,
@@ -137,7 +125,6 @@ export default function App() {
       navigator.serviceWorker.register('/sw.js').catch(err => console.error("SW reg error:", err));
     }
 
-    // Trigger initial background sync
     syncPendingRecordsToDrive();
 
     const handleOnline = () => {
@@ -157,7 +144,6 @@ export default function App() {
 
   const [speechLang, setSpeechLang] = useState('bn-IN'); // Default: Bengali (bn-IN) / English / Hindi
 
-  // Reference to background wake listener
   const wakeRecognitionRef = useRef(null);
 
   // Expanded Voice Command Listener for Wake Word "RUBY" & "Stop" in Bengali & English
@@ -209,45 +195,65 @@ export default function App() {
     }
   };
 
-  // Continuous Background Wake-Word Listener Effect
+  // Continuous Background Wake-Word Listener Effect for Web & Android
   useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+    let nativeWakeTimer = null;
 
-    if (isListening) return;
+    if (Capacitor.isNativePlatform() || Capacitor.getPlatform() === 'android') {
+      if (!isListening) {
+        const startNativeWakeWord = async () => {
+          try {
+            nativeListenersRef.current.forEach(l => l.remove());
+            nativeListenersRef.current = [];
 
-    let wakeRecognition = null;
-    try {
-      wakeRecognition = new SpeechRecognition();
-      wakeRecognition.continuous = true;
-      wakeRecognition.interimResults = true;
-      wakeRecognition.lang = speechLang || 'bn-IN';
+            const wakeListener = await NativeSpeech.addListener('onSpeechResult', (data) => {
+              if (data && data.transcript) {
+                detectVoiceCommand(data.transcript);
+              }
+            });
+            nativeListenersRef.current = [wakeListener];
+            await NativeSpeech.startListening({ language: speechLang });
+          } catch (e) {
+            console.warn("Native wake listener notice:", e);
+          }
+        };
 
-      wakeRecognition.onresult = (event) => {
-        let transcriptStr = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          transcriptStr += event.results[i][0].transcript;
+        startNativeWakeWord();
+      }
+    } else {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition && !isListening) {
+        let wakeRecognition = null;
+        try {
+          wakeRecognition = new SpeechRecognition();
+          wakeRecognition.continuous = true;
+          wakeRecognition.interimResults = true;
+          wakeRecognition.lang = speechLang || 'bn-IN';
+
+          wakeRecognition.onresult = (event) => {
+            let transcriptStr = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+              transcriptStr += event.results[i][0].transcript;
+            }
+            detectVoiceCommand(transcriptStr);
+          };
+
+          wakeRecognition.onend = () => {
+            if (!isListening && wakeRecognitionRef.current === wakeRecognition) {
+              try { wakeRecognition.start(); } catch (e) {}
+            }
+          };
+
+          wakeRecognitionRef.current = wakeRecognition;
+          wakeRecognition.start();
+        } catch (e) {
+          console.warn("Web background wake notice:", e);
         }
-        detectVoiceCommand(transcriptStr);
-      };
-
-      wakeRecognition.onerror = () => {};
-      wakeRecognition.onend = () => {
-        if (!isListening && wakeRecognitionRef.current === wakeRecognition) {
-          try { wakeRecognition.start(); } catch (e) {}
-        }
-      };
-
-      wakeRecognitionRef.current = wakeRecognition;
-      wakeRecognition.start();
-    } catch (e) {
-      console.warn("Background wake recognition notice:", e);
+      }
     }
 
     return () => {
-      if (wakeRecognition) {
-        try { wakeRecognition.stop(); } catch (e) {}
-      }
+      if (nativeWakeTimer) clearInterval(nativeWakeTimer);
     };
   }, [isListening, speechLang]);
 
@@ -307,7 +313,7 @@ export default function App() {
       }
     }
 
-    // Native Speech Recognizer for Android with RUBY wake word & language support
+    // Native Speech Recognizer for Android with language support & live streaming preview
     if (Capacitor.isNativePlatform() || Capacitor.getPlatform() === 'android') {
       try {
         setIsListening(true);
@@ -318,10 +324,11 @@ export default function App() {
 
         const resultListener = await NativeSpeech.addListener('onSpeechResult', (data) => {
           if (data && data.transcript) {
-            setLiveTranscript(data.transcript);
             if (data.isFinal) {
               setFinalTranscript(prev => (prev ? prev.trim() + ' ' + data.transcript.trim() : data.transcript.trim()));
               setLiveTranscript('');
+            } else {
+              setLiveTranscript(data.transcript);
             }
             detectVoiceCommand(data.transcript);
           }
@@ -727,18 +734,25 @@ export default function App() {
             </div>
           )}
 
-          {/* LIVE REAL-TIME STREAMING TRANSCRIPTION PANEL */}
-          {(isListening || liveTranscript || finalTranscript) && (
-            <div className="mt-3 p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl text-left space-y-1">
-              <div className="flex items-center space-x-1.5 text-xs font-black text-emerald-950">
-                <Radio className="w-4 h-4 text-rose-600 animate-pulse" />
-                <span>LIVE REAL-TIME TRANSCRIPTION</span>
-              </div>
-              <p className="text-xs text-slate-800 font-semibold leading-relaxed">
-                {finalTranscript} <span className="text-emerald-700 italic">{liveTranscript}</span>
-              </p>
+          {/* ALWAYS-VISIBLE LIVE REAL-TIME STREAMING TRANSCRIPTION PANEL */}
+          <div className="mt-3 p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl text-left space-y-1">
+            <div className="flex items-center space-x-1.5 text-xs font-black text-emerald-950">
+              <Radio className={`w-4 h-4 ${isListening ? 'text-rose-600 animate-pulse' : 'text-emerald-600'}`} />
+              <span>LIVE REAL-TIME TRANSCRIPTION ({speechLang === 'bn-IN' ? 'বাংলা' : speechLang})</span>
             </div>
-          )}
+            <p className="text-xs text-slate-800 font-semibold leading-relaxed min-h-[32px]">
+              {finalTranscript || liveTranscript ? (
+                <>
+                  <span>{finalTranscript}</span>{' '}
+                  <span className="text-emerald-700 italic">{liveTranscript}</span>
+                </>
+              ) : isListening ? (
+                <span className="text-emerald-600 italic font-normal">Listening... Speak now or say "RUBY"!</span>
+              ) : (
+                <span className="text-slate-400 italic font-normal">Tap Mic or say "RUBY" / "Hey Ruby" to transcribe...</span>
+              )}
+            </p>
+          </div>
         </div>
 
         {/* Form Inputs & Media Uploads */}
@@ -789,42 +803,32 @@ export default function App() {
             </>
           )}
 
-          {/* Failproof Ref-Based Button Media Pickers */}
+          {/* Failproof Native <label> Media File Pickers */}
           <div className="space-y-2 pt-1">
             <div className="grid grid-cols-2 gap-2">
-              {/* Photo Input Button */}
-              <button
-                type="button"
-                onClick={triggerPhotoPicker}
-                className="flex items-center justify-center space-x-1.5 p-2.5 bg-orange-50 border border-orange-200 rounded-xl hover:bg-orange-100/60 text-xs font-extrabold text-orange-950 transition-all cursor-pointer active:scale-95"
-              >
+              {/* Native Photo Input Label */}
+              <label className="flex items-center justify-center space-x-1.5 p-2.5 bg-orange-50 border border-orange-200 rounded-xl hover:bg-orange-100/60 text-xs font-extrabold text-orange-950 transition-all cursor-pointer active:scale-95">
                 <ImageIcon className="w-4 h-4 text-orange-600 flex-shrink-0" />
                 <span className="truncate">{imageFile ? imageFile.name : 'Upload Photo'}</span>
-              </button>
-              <input
-                ref={photoInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleImageChange}
-                style={{ display: 'none' }}
-              />
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageChange}
+                  style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }}
+                />
+              </label>
 
-              {/* Brochure Input Button */}
-              <button
-                type="button"
-                onClick={triggerBrochurePicker}
-                className="flex items-center justify-center space-x-1.5 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100/60 text-xs font-extrabold text-emerald-950 transition-all cursor-pointer active:scale-95"
-              >
+              {/* Native Brochure Input Label */}
+              <label className="flex items-center justify-center space-x-1.5 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100/60 text-xs font-extrabold text-emerald-950 transition-all cursor-pointer active:scale-95">
                 <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
                 <span className="truncate">{brochureFile ? brochureFile.name : 'Upload Brochure'}</span>
-              </button>
-              <input
-                ref={brochureInputRef}
-                type="file"
-                accept=".pdf,.doc,.docx,image/*"
-                onChange={handleBrochureChange}
-                style={{ display: 'none' }}
-              />
+                <input
+                  type="file"
+                  accept=".pdf,.doc,.docx,image/*"
+                  onChange={handleBrochureChange}
+                  style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }}
+                />
+              </label>
             </div>
 
             {/* Photo Thumbnail Preview */}

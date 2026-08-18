@@ -30,7 +30,7 @@ public class NativeSpeechPlugin extends Plugin {
         getBridge().getActivity().runOnUiThread(() -> {
             try {
                 if (speechRecognizer != null) {
-                    speechRecognizer.destroy();
+                    try { speechRecognizer.destroy(); } catch (Exception e) {}
                 }
 
                 speechRecognizer = SpeechRecognizer.createSpeechRecognizer(getContext());
@@ -39,7 +39,7 @@ public class NativeSpeechPlugin extends Plugin {
                 intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang);
                 intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang);
                 intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-                intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+                intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
 
                 speechRecognizer.setRecognitionListener(new RecognitionListener() {
                     @Override
@@ -56,17 +56,9 @@ public class NativeSpeechPlugin extends Plugin {
 
                     @Override
                     public void onError(int error) {
-                        try {
-                            Intent onlineIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-                            onlineIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-                            onlineIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang);
-                            onlineIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-                            speechRecognizer.startListening(onlineIntent);
-                        } catch (Exception e) {
-                            JSObject ret = new JSObject();
-                            ret.put("error", error);
-                            notifyListeners("onSpeechError", ret);
-                        }
+                        JSObject ret = new JSObject();
+                        ret.put("error", error);
+                        notifyListeners("onSpeechError", ret);
                     }
 
                     @Override
@@ -97,7 +89,7 @@ public class NativeSpeechPlugin extends Plugin {
                 speechRecognizer.startListening(intent);
                 call.resolve();
             } catch (Exception e) {
-                call.reject("Failed to start native offline speech recognizer: " + e.getMessage());
+                call.reject("Failed to start native speech recognizer: " + e.getMessage());
             }
         });
     }
@@ -106,7 +98,9 @@ public class NativeSpeechPlugin extends Plugin {
     public void stopListening(PluginCall call) {
         getBridge().getActivity().runOnUiThread(() -> {
             if (speechRecognizer != null) {
-                speechRecognizer.stopListening();
+                try {
+                    speechRecognizer.stopListening();
+                } catch (Exception e) {}
             }
             call.resolve();
         });
