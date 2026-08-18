@@ -4,11 +4,15 @@
 import json
 import base64
 import os
+import sys
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from app.integrations.google_service import GoogleExhibitionService
 from app.integrations.google_drive_uploader import GoogleDriveUploader
-from app.services.ai_reporting_service import AiReportingService
 from app.utils.logger import logger
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
