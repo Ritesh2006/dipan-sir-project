@@ -20,10 +20,12 @@ export default function App() {
   const [finalTranscript, setFinalTranscript] = useState('');
   const [records, setRecords] = useState([]);
   const [counter, setCounter] = useState({ STALL: 1, SCIENCE: 1, LECTURE: 1 });
-  const [serverIp, setServerIp] = useState(() => localStorage.getItem('SERVER_IP') || '172.28.36.209');
+  const [serverIp, setServerIp] = useState(() => localStorage.getItem('SERVER_IP') || 'exhibition-voice-logger-backend.onrender.com');
   const [syncNotice, setSyncNotice] = useState(null);
 
-  const UPLOAD_API_URL = `http://${serverIp}:8080/api/upload`;
+  const UPLOAD_API_URL = serverIp.includes('onrender.com') || serverIp.startsWith('http://') || serverIp.startsWith('https://')
+    ? (serverIp.startsWith('http') ? `${serverIp.replace(/\/$/, '')}/api/upload` : `https://${serverIp.replace(/\/$/, '')}/api/upload`)
+    : `http://${serverIp}:8080/api/upload`;
 
   const handleServerIpChange = (newIp) => {
     setServerIp(newIp);
