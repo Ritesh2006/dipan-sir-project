@@ -9,7 +9,6 @@ import {
 } from './db/offlineSheetManager';
 import { processTranscript, formatTranscriptForSheet } from './nlp/transcriptProcessor';
 import { startListening, stopListening, abortListening, isCurrentlyListening, getRemainingSeconds } from './speech/speechRecognition';
-import { startAudioCapture, stopAudioCapture, releaseMic } from './speech/audioCapture';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 import { Mic, Square, Upload, FileText, Camera, ExternalLink, X, Radio, WifiOff, Wifi, FileSpreadsheet, Clock, Settings, ChevronDown, ChevronUp, Keyboard } from 'lucide-react';
@@ -42,7 +41,6 @@ export default function App() {
   const [previewCounter, setPreviewCounter] = useState(1);
 
   const [speechLang, setSpeechLang] = useState(() => localStorage.getItem('SPEECH_LANG') || 'auto');
-  const [audioBlob, setAudioBlob] = useState(null);
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [brochureFile, setBrochureFile] = useState(null);
@@ -167,7 +165,7 @@ export default function App() {
   }, [speechLang]);
 
   useEffect(() => {
-    return () => { abortListening(); releaseMic(); clearInterval(timerRef.current); stopWakeWord(); };
+    return () => { abortListening(); clearInterval(timerRef.current); stopWakeWord(); };
   }, []);
 
   const detectVoiceCommand = useCallback((text) => {
@@ -252,10 +250,6 @@ export default function App() {
   const handleToggleRecording = useCallback(async () => {
     if (recordingState === 'listening') {
       clearInterval(timerRef.current);
-      const recordedBlob = await stopAudioCapture();
-      if (recordedBlob && recordedBlob.size > 100) {
-        setAudioBlob(recordedBlob);
-      }
       await stopListening();
       setRecordingState('idle');
       setLiveInterim('');
@@ -269,10 +263,8 @@ export default function App() {
       setTranscript('');
       setLiveInterim('');
       setTranscribeError('');
-      setAudioBlob(null);
       setElapsed(0);
       try {
-        await startAudioCapture();
         await startListening(
           speechLang,
           (finalText) => {
@@ -295,18 +287,12 @@ export default function App() {
             setTranscribeError(msg || 'Speech recognition failed');
             setRecordingState('idle');
             clearInterval(timerRef.current);
-            stopAudioCapture().then(blob => {
-              if (blob && blob.size > 100) setAudioBlob(blob);
-            });
             setStatus('Error');
           },
           (finalText) => {
             setRecordingState('idle');
             clearInterval(timerRef.current);
             setLiveInterim('');
-            stopAudioCapture().then(blob => {
-              if (blob && blob.size > 100) setAudioBlob(blob);
-            });
             if (finalText) {
               setTranscript(finalText);
               setStatus('30 min session complete');
@@ -382,26 +368,25 @@ export default function App() {
       let rowData = {};
       let sheetName = 'Stall Data';
 
-      let imageB64 = null, brochureB64 = null, audioB64 = null;
+      let imageB64 = null, brochureB64 = null;
       if (imageFile) try { imageB64 = await blobToBase64(imageFile); } catch {}
       if (brochureFile) try { brochureB64 = await blobToBase64(brochureFile); } catch {}
-      if (audioBlob) try { audioB64 = await blobToBase64(audioBlob); } catch {}
 
       const ts = new Date().toISOString().replace('T', ' ').substring(0, 16);
       if (activeTab === 'STALL') {
         sheetName = 'Stall Data';
         setCounter(p => ({ ...p, STALL: offlineCounter + 1 }));
-        rowData = { "Submission ID": subId, "Timestamp": ts, "Stall Name": stallForm.stallName.trim() || `Stall ${offlineCounter}`, "Stall No.": stallForm.stallNo.trim() || `A-0${offlineCounter}`, "Organization": stallForm.organization.trim() || 'Exhibition Organization', "Category": stallForm.category || 'General', "Person": stallForm.person || 'N/A', "Designation": stallForm.designation || 'N/A', "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: audioB64, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
+        rowData = { "Submission ID": subId, "Timestamp": ts, "Stall Name": stallForm.stallName.trim() || `Stall ${offlineCounter}`, "Stall No.": stallForm.stallNo.trim() || `A-0${offlineCounter}`, "Organization": stallForm.organization.trim() || 'Exhibition Organization', "Category": stallForm.category || 'General', "Person": stallForm.person || 'N/A', "Designation": stallForm.designation || 'N/A', "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: null, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
         setStallForm({ stallName: '', stallNo: '', organization: '', category: '', person: '', designation: '' });
       } else if (activeTab === 'SCIENCE') {
         sheetName = 'Science Exhibition Data';
         setCounter(p => ({ ...p, SCIENCE: offlineCounter + 1 }));
-        rowData = { "Submission ID": subId, "Timestamp": ts, "Exhibit/Project Name": sciForm.exhibitName.trim() || `Project ${offlineCounter}`, "Stall No.": sciForm.stallNo.trim() || `S-0${offlineCounter}`, "Organization/Institution": sciForm.organization.trim() || 'Science Institute', "Category": sciForm.category || 'Science', "Presenter": sciForm.presenter || 'N/A', "Designation/Class": sciForm.designationClass || 'N/A', "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: audioB64, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
+        rowData = { "Submission ID": subId, "Timestamp": ts, "Exhibit/Project Name": sciForm.exhibitName.trim() || `Project ${offlineCounter}`, "Stall No.": sciForm.stallNo.trim() || `S-0${offlineCounter}`, "Organization/Institution": sciForm.organization.trim() || 'Science Institute', "Category": sciForm.category || 'Science', "Presenter": sciForm.presenter || 'N/A', "Designation/Class": sciForm.designationClass || 'N/A', "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: null, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
         setSciForm({ exhibitName: '', stallNo: '', organization: '', category: '', presenter: '', designationClass: '' });
       } else {
         sheetName = 'Live Lecture Data';
         setCounter(p => ({ ...p, LECTURE: offlineCounter + 1 }));
-        rowData = { "Submission ID": subId, "Timestamp": ts, "Lecture Title": lecForm.lectureTitle.trim() || `Lecture ${offlineCounter}`, "Speaker": lecForm.speaker.trim() || `Speaker ${offlineCounter}`, "Designation": lecForm.designation || 'Speaker', "Organization": lecForm.organization || 'N/A', "Topic/Category": lecForm.topicCategory || 'Lecture', "Date/Time": lecForm.dateTime || new Date().toLocaleDateString(), "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: audioB64, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
+        rowData = { "Submission ID": subId, "Timestamp": ts, "Lecture Title": lecForm.lectureTitle.trim() || `Lecture ${offlineCounter}`, "Speaker": lecForm.speaker.trim() || `Speaker ${offlineCounter}`, "Designation": lecForm.designation || 'Speaker', "Organization": lecForm.organization || 'N/A', "Topic/Category": lecForm.topicCategory || 'Lecture', "Date/Time": lecForm.dateTime || new Date().toLocaleDateString(), "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: null, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
         setLecForm({ lectureTitle: '', speaker: '', designation: '', organization: '', topicCategory: '', dateTime: '' });
       }
 
@@ -412,7 +397,7 @@ export default function App() {
       await updateRecordToDB(rowData);
       await refreshSheetData();
       syncPendingRecordsToDrive();
-      setImageFile(null); setImagePreview(null); setBrochureFile(null); setAudioBlob(null); setTranscript('');
+      setImageFile(null); setImagePreview(null); setBrochureFile(null); setTranscript('');
       setShowPreview(false);
       setStatus('Saved successfully');
     } catch (err) {
@@ -661,7 +646,7 @@ export default function App() {
         <HistoryTable records={records} onClear={handleClearHistory} sheetRows={sheetRows} sheetFilter={sheetFilter} onFilterChange={setSheetFilter} onRefreshSheet={refreshSheetData} />
       </main>
 
-      <ExcelPreview show={showPreview} onClose={() => { if (!isSubmitting) setShowPreview(false); }} onSubmit={handleConfirmSubmit} activeTab={activeTab} formData={activeTab === 'STALL' ? stallForm : activeTab === 'SCIENCE' ? sciForm : lecForm} transcript={transcript} audioBlob={audioBlob} imageFile={imageFile} imagePreview={imagePreview} brochureFile={brochureFile} subId={previewSubId} counter={previewCounter} isSubmitting={isSubmitting} />
+      <ExcelPreview show={showPreview} onClose={() => { if (!isSubmitting) setShowPreview(false); }} onSubmit={handleConfirmSubmit} activeTab={activeTab} formData={activeTab === 'STALL' ? stallForm : activeTab === 'SCIENCE' ? sciForm : lecForm} transcript={transcript} audioBlob={null} imageFile={imageFile} imagePreview={imagePreview} brochureFile={brochureFile} subId={previewSubId} counter={previewCounter} isSubmitting={isSubmitting} />
     </div>
   );
 }
