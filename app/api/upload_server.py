@@ -220,7 +220,7 @@ class UploadRequestHandler(BaseHTTPRequestHandler):
             audio_path = None
             if audio_base64:
                 audio_bytes = base64.b64decode(audio_base64.split(',')[-1])
-                audio_path = UPLOAD_DIR / f"audio_{sub_id}.webm"
+                audio_path = UPLOAD_DIR / f"audio_{sub_id}.wav"
                 audio_path.write_bytes(audio_bytes)
 
             image_base64 = payload.get('image_base64')

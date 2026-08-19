@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="NONE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="213478b0-6ce3-414a-bd7c-fe7af07fe62e" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/app/api/upload_server.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/api/upload_server.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mobile_app/src/App.jsx" beforeDir="false" afterPath="$PROJECT_DIR$/mobile_app/src/App.jsx" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ClangdSettings">
+    <option name="formatViaClangd" value="false" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 3,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3HvEqu2nf1Fz7KH1cZg6YKpp3e0" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.cidr.known.project.marker&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.readMode.enableVisualFormatting&quot;: &quot;true&quot;,
+    &quot;cf.first.check.clang-format&quot;: &quot;false&quot;,
+    &quot;cidr.known.project.marker&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/riteshrakshit/voice text excel loger &quot;
+  }
+}</component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="213478b0-6ce3-414a-bd7c-fe7af07fe62e" name="Changes" comment="" />
+      <created>1786740336402</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1786740336402</updated>
+    </task>
+    <servers />
+  </component>
+</project>

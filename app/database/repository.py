@@ -38,15 +38,16 @@ class ProcessingLogRepository:
         try:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(sql, (limit,))
-                rows = cursor.fetchall()
-                for row in rows:
-                    item = dict(row)
+                cursor.execute(sql, (limit,)) 
+                rows = cursor.fetchall()                  
+                for row in rows:                
+                    item = dict(row)            
                     try:
                         item["extracted_data"] = json.loads(item["extracted_data"])
                     except Exception:
                         pass
-                    logs.append(item)
+                    logs.append(item)       
         except Exception as e:
             logger.error(f"Error fetching logs from database: {e}")
         return logs
+ 
