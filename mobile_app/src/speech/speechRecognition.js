@@ -3,7 +3,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 const NativeSpeech = registerPlugin('NativeSpeech');
 
 const LANG_MAP = {
-  'auto': '',
+  'auto': 'auto',
   'hi-IN': 'hi-IN',
   'hi': 'hi-IN',
   'bn-IN': 'bn-IN',
@@ -12,208 +12,139 @@ const LANG_MAP = {
   'en': 'en-US',
 };
 
-let webRecognition = null;
-let isListening = false;
-let finalTranscript = '';
-let interimTranscript = '';
-let onResultCallback = null;
-let onInterimCallback = null;
-let onErrorCallback = null;
-let onEndCallback = null;
-let nativeListeners = [];
-
-const isNative = Capacitor.isNativePlatform() || Capacitor.getPlatform() === 'android';
+let listeners = [];
+let isListeningFlag = false;
+let currentLanguage = 'hi-IN';
 
 export async function startListening(language = 'auto', onResult, onInterim, onError, onEnd) {
-  if (isListening) {
-    stopListening();
+  if (isListeningFlag) {
+    await stopListening();
   }
 
-  finalTranscript = '';
-  interimTranscript = '';
-  onResultCallback = onResult;
-  onInterimCallback = onInterim;
-  onErrorCallback = onError;
-  onEndCallback = onEnd;
+  const lang = LANG_MAP[language] || 'hi-IN';
+  currentLanguage = lang;
+  isListeningFlag = true;
 
-  const targetLang = LANG_MAP[language] || (language === 'auto' ? 'hi-IN' : language);
-  const autoDetect = language === 'auto';
-
-  // 1. Android Native Platform Speech Recognizer
-  if (isNative) {
+  if (Capacitor.isNativePlatform()) {
     try {
-      // Remove any prior listeners
-      nativeListeners.forEach(l => {
-        try { l.remove(); } catch {}
-      });
-      nativeListeners = [];
-
       const resultListener = await NativeSpeech.addListener('onSpeechResult', (data) => {
         if (data && data.transcript) {
           if (data.isFinal) {
-            finalTranscript += (finalTranscript ? ' ' : '') + data.transcript.trim();
-            interimTranscript = '';
-            if (onResultCallback) {
-              onResultCallback(finalTranscript.trim());
-            }
+            if (onResult) onResult(data.transcript);
           } else {
-            interimTranscript = data.transcript;
-            if (onInterimCallback) {
-              onInterimCallback((finalTranscript ? finalTranscript + ' ' : '') + interimTranscript);
-            }
+            if (onInterim) onInterim(data.transcript);
           }
         }
       });
 
       const errorListener = await NativeSpeech.addListener('onSpeechError', (err) => {
-        if (err && (err.errorName === 'NO_MATCH' || err.errorName === 'SPEECH_TIMEOUT')) {
-          // Normal silence timeouts in continuous mode - do not abort
-          return;
-        }
-        if (onErrorCallback) {
-          onErrorCallback(new Error(err.errorName || `Speech error code: ${err.error}`));
+        isListeningFlag = false;
+        if (onError) onError(new Error(err.errorName || 'Speech error'));
+      });
+
+      const stateListener = await NativeSpeech.addListener('onSpeechState', (data) => {
+        if (data && data.status === 'ready') {
+          if (onEnd) onEnd('');
         }
       });
 
-      const stateListener = await NativeSpeech.addListener('onSpeechState', (state) => {
-        if (state && state.status === 'ready') {
-          isListening = true;
-        }
-      });
-
-      nativeListeners = [resultListener, errorListener, stateListener];
+      listeners = [resultListener, errorListener, stateListener];
 
       await NativeSpeech.startListening({
-        language: targetLang,
-        autoDetect: autoDetect,
-        continuous: true
+        language: lang === 'auto' ? 'hi-IN' : lang,
+        autoDetect: lang === 'auto',
+        continuous: false,
       });
-
-      isListening = true;
+    } catch (err) {
+      isListeningFlag = false;
+      if (onError) onError(err);
+    }
+  } else {
+    // Fallback: Web Speech API for browser
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      isListeningFlag = false;
+      if (onError) onError(new Error('Speech recognition not supported'));
       return;
-    } catch (nativeErr) {
-      console.warn("Native speech start failed, trying web fallback:", nativeErr);
     }
-  }
 
-  // 2. Web Browser Fallback (Web Speech API)
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    if (onErrorCallback) {
-      onErrorCallback(new Error('Speech recognition not supported on this device/browser'));
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    if (lang !== 'auto') {
+      recognition.lang = lang;
     }
-    return;
-  }
 
-  webRecognition = new SpeechRecognition();
-  webRecognition.continuous = true;
-  webRecognition.interimResults = true;
-  webRecognition.maxAlternatives = 1;
+    let finalText = '';
 
-  if (targetLang) {
-    webRecognition.lang = targetLang;
-  }
-
-  webRecognition.onresult = (event) => {
-    interimTranscript = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) {
-        finalTranscript += (finalTranscript ? ' ' : '') + transcript.trim();
-        if (onResultCallback) {
-          onResultCallback(finalTranscript.trim());
-        }
-      } else {
-        interimTranscript += transcript;
-        if (onInterimCallback) {
-          onInterimCallback((finalTranscript ? finalTranscript + ' ' : '') + interimTranscript);
+    recognition.onresult = (event) => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalText += t + ' ';
+          if (onResult) onResult(finalText.trim());
+        } else {
+          interim += t;
+          if (onInterim) onInterim(finalText.trim() + interim);
         }
       }
-    }
-  };
+    };
 
-  webRecognition.onerror = (event) => {
-    if (event.error === 'no-speech') return;
-    if (onErrorCallback) {
-      onErrorCallback(new Error(`Speech error: ${event.error}`));
-    }
-  };
+    recognition.onerror = (event) => {
+      isListeningFlag = false;
+      if (event.error === 'no-speech') return;
+      if (onError) onError(new Error(`Speech error: ${event.error}`));
+    };
 
-  webRecognition.onend = () => {
-    if (isListening && webRecognition) {
-      try {
-        webRecognition.start();
-        return;
-      } catch {}
-    }
-    isListening = false;
-    if (onEndCallback) {
-      onEndCallback(finalTranscript.trim());
-    }
-  };
+    recognition.onend = () => {
+      isListeningFlag = false;
+      if (onEnd) onEnd(finalText.trim());
+    };
 
-  try {
-    webRecognition.start();
-    isListening = true;
-  } catch (err) {
-    isListening = false;
-    if (onErrorCallback) {
-      onErrorCallback(err);
+    try {
+      recognition.start();
+    } catch (err) {
+      isListeningFlag = false;
+      if (onError) onError(err);
     }
   }
 }
 
-export function stopListening() {
-  isListening = false;
+export async function stopListening() {
+  isListeningFlag = false;
 
-  if (isNative) {
+  if (Capacitor.isNativePlatform()) {
     try {
-      NativeSpeech.stopListening();
-    } catch {}
-    nativeListeners.forEach(l => {
-      try { l.remove(); } catch {}
-    });
-    nativeListeners = [];
+      await NativeSpeech.stopListening();
+    } catch (e) {}
   }
 
-  if (webRecognition) {
-    try {
-      webRecognition.stop();
-    } catch {}
-    webRecognition = null;
-  }
-
-  return finalTranscript.trim();
-}
-
-export function getTranscript() {
-  return finalTranscript.trim();
+  listeners.forEach(l => {
+    try { l.remove(); } catch (e) {}
+  });
+  listeners = [];
 }
 
 export function isCurrentlyListening() {
-  return isListening;
+  return isListeningFlag;
 }
 
-export function abortListening() {
-  isListening = false;
+export async function abortListening() {
+  isListeningFlag = false;
+  await stopListening();
+}
 
-  if (isNative) {
+export async function checkAvailability() {
+  if (Capacitor.isNativePlatform()) {
     try {
-      NativeSpeech.stopListening();
-    } catch {}
-    nativeListeners.forEach(l => {
-      try { l.remove(); } catch {}
-    });
-    nativeListeners = [];
+      const result = await NativeSpeech.isAvailable();
+      return result.available;
+    } catch {
+      return false;
+    }
   }
-
-  if (webRecognition) {
-    try {
-      webRecognition.abort();
-    } catch {}
-    webRecognition = null;
-  }
-
-  finalTranscript = '';
-  interimTranscript = '';
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 }

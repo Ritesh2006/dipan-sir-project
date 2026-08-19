@@ -8,12 +8,21 @@ import {
   getTranscriptionsByTab, getNextCounter, clearAllTranscriptions, autoLogPhrase
 } from './db/offlineSheetManager';
 import { processTranscript, formatTranscriptForSheet } from './nlp/transcriptProcessor';
-import { startListening, stopListening, abortListening, getTranscript, isCurrentlyListening } from './speech/speechRecognition';
+import { startListening, stopListening, abortListening, isCurrentlyListening, checkAvailability } from './speech/speechRecognition';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 
 import { Mic, Square, Upload, FileText, Camera, ExternalLink, X, Radio, WifiOff, Wifi, FileSpreadsheet, Clock, Settings, ChevronDown, ChevronUp, Keyboard } from 'lucide-react';
 import ExcelPreview from './components/ExcelPreview';
 
+const NativeSpeech = registerPlugin('NativeSpeech');
 const DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/1aaD44uttnMpWdLo19tko-8Ipl3_MUhbk";
+
+const WAKE_WORDS = [
+  'ruby', 'rooby', 'rubi', 'rube', 'rubee',
+  'hey ruby', 'hi ruby', 'ok ruby', 'start ruby', 'ruby start',
+  'start recording', 'begin recording', 'record', 'start',
+  'রুবি', 'রূবি', 'শুরু', 'স্টার্টিং',
+];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('STALL');
@@ -32,7 +41,6 @@ export default function App() {
   const [previewCounter, setPreviewCounter] = useState(1);
 
   const [speechLang, setSpeechLang] = useState(() => localStorage.getItem('SPEECH_LANG') || 'auto');
-  const [audioBlob, setAudioBlob] = useState(null);
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [brochureFile, setBrochureFile] = useState(null);
@@ -54,13 +62,16 @@ export default function App() {
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualText, setManualText] = useState('');
 
+  const [wakeWordActive, setWakeWordActive] = useState(false);
+  const wakeListenersRef = useRef([]);
+
   const UPLOAD_API_URL = serverIp.includes('onrender.com') || serverIp.startsWith('http://') || serverIp.startsWith('https://')
     ? (serverIp.startsWith('http') ? `${serverIp.replace(/\/$/, '')}/api/upload` : `https://${serverIp.replace(/\/$/, '')}/api/upload`)
     : `http://${serverIp}:8080/api/upload`;
 
   const handleServerIpChange = (newIp) => {
     setServerIp(newIp);
-    try { localStorage.setItem('SERVER_IP', newIp); } catch (e) {}
+    try { localStorage.setItem('SERVER_IP', newIp); } catch {}
   };
 
   const refreshSheetData = async () => {
@@ -69,7 +80,7 @@ export default function App() {
         ? await getAllTranscriptions()
         : await getTranscriptionsByTab(sheetFilter);
       setSheetRows(rows);
-    } catch (e) {}
+    } catch {}
   };
 
   const syncPendingRecordsToDrive = async () => {
@@ -113,11 +124,11 @@ export default function App() {
                 const sheetRow = await getTranscriptionsByTab(rec._activeTab || 'STALL');
                 const match = sheetRow.find(r => r.id === rec._offlineSheetId);
                 if (match) { match.syncStatus = 'SYNCED'; await updateTranscriptionRow(match); }
-              } catch (e) {}
+              } catch {}
             }
             syncedCount++;
           }
-        } catch (singleErr) {}
+        } catch {}
       }
       if (syncedCount > 0) {
         const updatedRecords = await getAllRecordsFromDB();
@@ -126,7 +137,7 @@ export default function App() {
         setSyncNotice(`Synced ${syncedCount} record(s) to Drive!`);
         setTimeout(() => setSyncNotice(null), 5000);
       }
-    } catch (err) {}
+    } catch {}
   };
 
   useEffect(() => {
@@ -154,19 +165,96 @@ export default function App() {
   }, [speechLang]);
 
   useEffect(() => {
-    return () => { abortListening(); clearInterval(timerRef.current); };
+    return () => { abortListening(); clearInterval(timerRef.current); stopWakeWord(); };
+  }, []);
+
+  const detectVoiceCommand = useCallback((text) => {
+    if (!text) return;
+    const lower = text.toLowerCase().trim();
+
+    const isWakeWord = WAKE_WORDS.some(w => lower.includes(w));
+    if (isWakeWord && recordingState === 'idle') {
+      handleToggleRecording();
+      return;
+    }
+
+    const isStopWord = lower.includes('stop') || lower.includes('থামাও') || lower.includes('বন্ধ');
+    if (isStopWord && recordingState === 'listening') {
+      handleToggleRecording();
+    }
+  }, [recordingState]);
+
+  const startWakeWord = useCallback(async () => {
+    if (wakeWordActive) return;
+
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const wakeListener = await NativeSpeech.addListener('onSpeechResult', (data) => {
+          if (data && data.transcript) {
+            detectVoiceCommand(data.transcript);
+          }
+        });
+        wakeListenersRef.current = [wakeListener];
+        await NativeSpeech.startListening({
+          language: speechLang === 'auto' ? 'hi-IN' : speechLang,
+          autoDetect: speechLang === 'auto',
+          continuous: true,
+        });
+        setWakeWordActive(true);
+      } catch (e) {
+        console.warn("Wake word start failed:", e);
+      }
+    } else {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) return;
+
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = speechLang === 'auto' ? '' : speechLang;
+
+      recognition.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            detectVoiceCommand(event.results[i][0].transcript);
+          }
+        }
+      };
+
+      recognition.onerror = () => {};
+      recognition.onend = () => {
+        if (wakeWordActive) {
+          try { recognition.start(); } catch {}
+        }
+      };
+
+      try {
+        recognition.start();
+        wakeListenersRef.current = [{ remove: () => { try { recognition.stop(); } catch {} } }];
+        setWakeWordActive(true);
+      } catch {}
+    }
+  }, [wakeWordActive, speechLang, detectVoiceCommand, recordingState]);
+
+  const stopWakeWord = useCallback(async () => {
+    setWakeWordActive(false);
+    if (Capacitor.isNativePlatform()) {
+      try { await NativeSpeech.stopListening(); } catch {}
+    }
+    wakeListenersRef.current.forEach(l => {
+      try { l.remove(); } catch {}
+    });
+    wakeListenersRef.current = [];
   }, []);
 
   const handleToggleRecording = useCallback(async () => {
     if (recordingState === 'listening') {
       clearInterval(timerRef.current);
-      const finalText = stopListening();
+      await stopListening();
       setRecordingState('idle');
       setLiveInterim('');
+      const finalText = transcript;
       if (finalText) {
-        const cleaned = processTranscript(finalText);
-        setTranscript(cleaned);
-        setTranscribeError('');
         setStatus('Transcription complete');
       } else {
         setTranscribeError('No speech detected. Try again.');
@@ -178,7 +266,7 @@ export default function App() {
       setTranscribeError('');
       setElapsed(0);
       try {
-        startListening(
+        await startListening(
           speechLang,
           (finalText) => {
             setTranscript(processTranscript(finalText));
@@ -217,7 +305,7 @@ export default function App() {
         setStatus('Ready');
       }
     }
-  }, [recordingState, speechLang]);
+  }, [recordingState, speechLang, transcript]);
 
   const handleManualSubmit = useCallback(() => {
     if (!manualText.trim()) return;
@@ -231,7 +319,6 @@ export default function App() {
     if (!transcript.trim()) return;
     autoLogPhrase({ tab: activeTab, transcript: processTranscript(transcript) });
     setTranscript('');
-    setAudioBlob(null);
     setStatus('Saved to sheet');
     refreshSheetData();
   }, [transcript, activeTab]);
@@ -270,26 +357,25 @@ export default function App() {
       let rowData = {};
       let sheetName = 'Stall Data';
 
-      let audioB64 = null, imageB64 = null, brochureB64 = null;
-      if (audioBlob) try { audioB64 = await blobToBase64(audioBlob); } catch (e) {}
-      if (imageFile) try { imageB64 = await blobToBase64(imageFile); } catch (e) {}
-      if (brochureFile) try { brochureB64 = await blobToBase64(brochureFile); } catch (e) {}
+      let imageB64 = null, brochureB64 = null;
+      if (imageFile) try { imageB64 = await blobToBase64(imageFile); } catch {}
+      if (brochureFile) try { brochureB64 = await blobToBase64(brochureFile); } catch {}
 
       const ts = new Date().toISOString().replace('T', ' ').substring(0, 16);
       if (activeTab === 'STALL') {
         sheetName = 'Stall Data';
         setCounter(p => ({ ...p, STALL: offlineCounter + 1 }));
-        rowData = { "Submission ID": subId, "Timestamp": ts, "Stall Name": stallForm.stallName.trim() || `Stall ${offlineCounter}`, "Stall No.": stallForm.stallNo.trim() || `A-0${offlineCounter}`, "Organization": stallForm.organization.trim() || 'Exhibition Organization', "Category": stallForm.category || 'General', "Person": stallForm.person || 'N/A', "Designation": stallForm.designation || 'N/A', "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: audioB64, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
+        rowData = { "Submission ID": subId, "Timestamp": ts, "Stall Name": stallForm.stallName.trim() || `Stall ${offlineCounter}`, "Stall No.": stallForm.stallNo.trim() || `A-0${offlineCounter}`, "Organization": stallForm.organization.trim() || 'Exhibition Organization', "Category": stallForm.category || 'General', "Person": stallForm.person || 'N/A', "Designation": stallForm.designation || 'N/A', "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: null, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
         setStallForm({ stallName: '', stallNo: '', organization: '', category: '', person: '', designation: '' });
       } else if (activeTab === 'SCIENCE') {
         sheetName = 'Science Exhibition Data';
         setCounter(p => ({ ...p, SCIENCE: offlineCounter + 1 }));
-        rowData = { "Submission ID": subId, "Timestamp": ts, "Exhibit/Project Name": sciForm.exhibitName.trim() || `Project ${offlineCounter}`, "Stall No.": sciForm.stallNo.trim() || `S-0${offlineCounter}`, "Organization/Institution": sciForm.organization.trim() || 'Science Institute', "Category": sciForm.category || 'Science', "Presenter": sciForm.presenter || 'N/A', "Designation/Class": sciForm.designationClass || 'N/A', "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: audioB64, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
+        rowData = { "Submission ID": subId, "Timestamp": ts, "Exhibit/Project Name": sciForm.exhibitName.trim() || `Project ${offlineCounter}`, "Stall No.": sciForm.stallNo.trim() || `S-0${offlineCounter}`, "Organization/Institution": sciForm.organization.trim() || 'Science Institute', "Category": sciForm.category || 'Science', "Presenter": sciForm.presenter || 'N/A', "Designation/Class": sciForm.designationClass || 'N/A', "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: null, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
         setSciForm({ exhibitName: '', stallNo: '', organization: '', category: '', presenter: '', designationClass: '' });
       } else {
         sheetName = 'Live Lecture Data';
         setCounter(p => ({ ...p, LECTURE: offlineCounter + 1 }));
-        rowData = { "Submission ID": subId, "Timestamp": ts, "Lecture Title": lecForm.lectureTitle.trim() || `Lecture ${offlineCounter}`, "Speaker": lecForm.speaker.trim() || `Speaker ${offlineCounter}`, "Designation": lecForm.designation || 'Speaker', "Organization": lecForm.organization || 'N/A', "Topic/Category": lecForm.topicCategory || 'Lecture', "Date/Time": lecForm.dateTime || new Date().toLocaleDateString(), "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: audioB64, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
+        rowData = { "Submission ID": subId, "Timestamp": ts, "Lecture Title": lecForm.lectureTitle.trim() || `Lecture ${offlineCounter}`, "Speaker": lecForm.speaker.trim() || `Speaker ${offlineCounter}`, "Designation": lecForm.designation || 'Speaker', "Organization": lecForm.organization || 'N/A', "Topic/Category": lecForm.topicCategory || 'Lecture', "Date/Time": lecForm.dateTime || new Date().toLocaleDateString(), "Audio Drive Link": `${DRIVE_FOLDER_URL}?sub_id=${subId}`, "Image Drive Link": imageFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Photo` : 'N/A', "Brochure Drive Link": brochureFile ? `${DRIVE_FOLDER_URL}?sub_id=${subId}&file=Brochure` : 'N/A', "Transcript": fullText, "Verification Status": "Saved Offline", syncStatus: "PENDING_DRIVE_SYNC", _sheetName: sheetName, _activeTab: activeTab, _audioBase64: null, _imageBase64: imageB64, _imageName: imageFile ? imageFile.name : 'photo.jpg', _brochureBase64: brochureB64, _brochureName: brochureFile ? brochureFile.name : 'brochure.pdf' };
         setLecForm({ lectureTitle: '', speaker: '', designation: '', organization: '', topicCategory: '', dateTime: '' });
       }
 
@@ -300,9 +386,12 @@ export default function App() {
       await updateRecordToDB(rowData);
       await refreshSheetData();
       syncPendingRecordsToDrive();
-      setImageFile(null); setImagePreview(null); setBrochureFile(null); setAudioBlob(null); setTranscript('');
+      setImageFile(null); setImagePreview(null); setBrochureFile(null); setTranscript('');
       setShowPreview(false);
-    } catch (err) { alert("Error saving. Try again."); }
+      setStatus('Saved successfully');
+    } catch (err) {
+      alert("Error saving. Try again.");
+    }
     finally { setIsSubmitting(false); }
   };
 
@@ -339,7 +428,7 @@ export default function App() {
         <div className="bg-white border-2 border-emerald-300 rounded-2xl p-3 shadow-xs flex items-center justify-between">
           <div className="flex items-center space-x-2">
             {isOnline ? <Wifi className="w-4 h-4 text-emerald-600" /> : <WifiOff className="w-4 h-4 text-rose-500" />}
-            <span className="text-xs font-black text-emerald-950">{isOnline ? 'Online - Local Speech' : 'Offline'}</span>
+            <span className="text-xs font-black text-emerald-950">{isOnline ? 'Online' : 'Offline'}</span>
           </div>
           <a href={DRIVE_FOLDER_URL} target="_blank" rel="noopener noreferrer" className="text-[11px] font-black text-emerald-700 underline flex items-center space-x-1"><span>Drive</span><ExternalLink className="w-3 h-3" /></a>
         </div>
@@ -385,7 +474,7 @@ export default function App() {
             )}
 
             <p className="text-[10px] text-slate-500 font-bold text-center">
-              {recordingState === 'idle' && !transcript && 'Tap mic to start speech recognition'}
+              {recordingState === 'idle' && !transcript && 'Tap mic or say "RUBY" to start'}
               {recordingState === 'listening' && 'Listening... speak now, tap stop when done'}
               {recordingState === 'idle' && transcript && 'Transcription ready below'}
             </p>
@@ -401,11 +490,11 @@ export default function App() {
             <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-xl">
               <div className="flex items-center space-x-1.5 mb-1.5">
                 <FileText className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="text-[10px] font-black text-slate-500 uppercase">Transcript (Local STT)</span>
+                <span className="text-[10px] font-black text-slate-500 uppercase">Transcript</span>
               </div>
               <p className="text-sm text-slate-800 font-semibold leading-relaxed whitespace-pre-wrap">{transcript}</p>
               <div className="mt-2 flex items-center space-x-2">
-                <button onClick={() => { setTranscript(''); setAudioBlob(null); setTranscribeError(''); }} className="text-[10px] font-bold text-rose-500 hover:text-rose-700 px-2 py-1 rounded hover:bg-rose-50">Clear</button>
+                <button onClick={() => { setTranscript(''); setTranscribeError(''); }} className="text-[10px] font-bold text-rose-500 hover:text-rose-700 px-2 py-1 rounded hover:bg-rose-50">Clear</button>
                 <button onClick={() => setShowManualInput(!showManualInput)} className="text-[10px] font-bold text-violet-600 hover:text-violet-800 px-2 py-1 rounded hover:bg-violet-50 flex items-center space-x-1"><Keyboard className="w-3 h-3" /><span>Edit</span></button>
               </div>
             </div>
@@ -527,6 +616,15 @@ export default function App() {
                 <label className="text-[10px] font-black text-slate-500 block mb-1">Backend Server</label>
                 <input type="text" value={serverIp} onChange={e => handleServerIpChange(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-violet-500" />
               </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-500 block mb-1">Wake Word ("RUBY")</label>
+                <button
+                  onClick={wakeWordActive ? stopWakeWord : startWakeWord}
+                  className={`w-full py-2 rounded-xl text-xs font-black transition-all ${wakeWordActive ? 'bg-rose-100 text-rose-700 border border-rose-300' : 'bg-emerald-100 text-emerald-700 border border-emerald-300'}`}
+                >
+                  {wakeWordActive ? 'Wake Word: ACTIVE (tap to stop)' : 'Enable Wake Word "RUBY"'}
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -534,7 +632,7 @@ export default function App() {
         <HistoryTable records={records} onClear={handleClearHistory} sheetRows={sheetRows} sheetFilter={sheetFilter} onFilterChange={setSheetFilter} onRefreshSheet={refreshSheetData} />
       </main>
 
-      <ExcelPreview show={showPreview} onClose={() => { if (!isSubmitting) setShowPreview(false); }} onSubmit={handleConfirmSubmit} activeTab={activeTab} formData={activeTab === 'STALL' ? stallForm : activeTab === 'SCIENCE' ? sciForm : lecForm} transcript={transcript} audioBlob={audioBlob} imageFile={imageFile} imagePreview={imagePreview} brochureFile={brochureFile} subId={previewSubId} counter={previewCounter} isSubmitting={isSubmitting} />
+      <ExcelPreview show={showPreview} onClose={() => { if (!isSubmitting) setShowPreview(false); }} onSubmit={handleConfirmSubmit} activeTab={activeTab} formData={activeTab === 'STALL' ? stallForm : activeTab === 'SCIENCE' ? sciForm : lecForm} transcript={transcript} audioBlob={null} imageFile={imageFile} imagePreview={imagePreview} brochureFile={brochureFile} subId={previewSubId} counter={previewCounter} isSubmitting={isSubmitting} />
     </div>
   );
 }
