@@ -8,10 +8,9 @@ import {
   getTranscriptionsByTab, getNextCounter, clearAllTranscriptions, autoLogPhrase
 } from './db/offlineSheetManager';
 import { processTranscript, formatTranscriptForSheet } from './nlp/transcriptProcessor';
-import { transcribeWithNim } from './speech/nvidiaNimService';
-import { startRecording, stopRecording, releaseMic } from './speech/audioRecorder';
+import { startListening, stopListening, abortListening, getTranscript, isCurrentlyListening } from './speech/speechRecognition';
 
-import { Mic, Square, Upload, FileText, Camera, ExternalLink, X, Radio, WifiOff, Wifi, FileSpreadsheet, Clock, Loader2, Settings, ChevronDown, ChevronUp, Keyboard } from 'lucide-react';
+import { Mic, Square, Upload, FileText, Camera, ExternalLink, X, Radio, WifiOff, Wifi, FileSpreadsheet, Clock, Settings, ChevronDown, ChevronUp, Keyboard } from 'lucide-react';
 import ExcelPreview from './components/ExcelPreview';
 
 const DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/1aaD44uttnMpWdLo19tko-8Ipl3_MUhbk";
@@ -47,6 +46,7 @@ export default function App() {
   const [recordingState, setRecordingState] = useState('idle');
   const [elapsed, setElapsed] = useState(0);
   const [transcript, setTranscript] = useState('');
+  const [liveInterim, setLiveInterim] = useState('');
   const [transcribeError, setTranscribeError] = useState('');
   const timerRef = useRef(null);
 
@@ -154,49 +154,65 @@ export default function App() {
   }, [speechLang]);
 
   useEffect(() => {
-    return () => { releaseMic(); clearInterval(timerRef.current); };
+    return () => { abortListening(); clearInterval(timerRef.current); };
   }, []);
 
   const handleToggleRecording = useCallback(async () => {
-    if (recordingState === 'recording') {
+    if (recordingState === 'listening') {
       clearInterval(timerRef.current);
-      setRecordingState('transcribing');
-      setStatus('Transcribing...');
-      try {
-        const blob = await stopRecording();
-        if (!blob || blob.size < 100) {
-          setTranscribeError('No audio captured. Check microphone.');
-          setRecordingState('idle');
-          setStatus('Ready');
-          return;
-        }
-        setAudioBlob(blob);
-        const result = await transcribeWithNim(blob, speechLang);
-        const cleaned = processTranscript(result.text);
+      const finalText = stopListening();
+      setRecordingState('idle');
+      setLiveInterim('');
+      if (finalText) {
+        const cleaned = processTranscript(finalText);
         setTranscript(cleaned);
         setTranscribeError('');
         setStatus('Transcription complete');
-      } catch (err) {
-        setTranscribeError(err.message || 'Transcription failed');
-        setStatus('Error');
-        setRecordingState('idle');
+      } else {
+        setTranscribeError('No speech detected. Try again.');
+        setStatus('Ready');
       }
-      setRecordingState('idle');
     } else {
       setTranscript('');
+      setLiveInterim('');
       setTranscribeError('');
-      setAudioBlob(null);
       setElapsed(0);
       try {
-        await startRecording();
-        setRecordingState('recording');
-        setStatus('Recording...');
+        startListening(
+          speechLang,
+          (finalText) => {
+            setTranscript(processTranscript(finalText));
+            setLiveInterim('');
+          },
+          (interimText) => {
+            setLiveInterim(interimText);
+          },
+          (err) => {
+            setTranscribeError(err.message || 'Speech recognition failed');
+            setRecordingState('idle');
+            clearInterval(timerRef.current);
+            setStatus('Error');
+          },
+          (finalText) => {
+            if (recordingState === 'listening') {
+              setRecordingState('idle');
+              clearInterval(timerRef.current);
+              setLiveInterim('');
+              if (finalText) {
+                setTranscript(processTranscript(finalText));
+                setStatus('Transcription complete');
+              }
+            }
+          }
+        );
+        setRecordingState('listening');
+        setStatus('Listening...');
         const start = Date.now();
         timerRef.current = setInterval(() => {
           setElapsed(Math.floor((Date.now() - start) / 1000));
         }, 200);
       } catch (err) {
-        setTranscribeError(err.message || 'Could not start recording');
+        setTranscribeError(err.message || 'Speech recognition not available');
         setRecordingState('idle');
         setStatus('Ready');
       }
@@ -310,7 +326,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50/60 via-white to-emerald-50/50 text-slate-900 flex flex-col font-sans select-none pb-8">
-      <HeaderBar status={status} onExportExcel={handleExportExcel} serverIp={serverIp} onServerIpChange={handleServerIpChange} isOnline={isOnline} speechEngine={recordingState === 'recording' ? 'Recording' : recordingState === 'transcribing' ? 'NIM Whisper' : 'Ready'} />
+      <HeaderBar status={status} onExportExcel={handleExportExcel} serverIp={serverIp} onServerIpChange={handleServerIpChange} isOnline={isOnline} speechEngine={recordingState === 'listening' ? 'Listening' : 'Local STT'} />
 
       <main className="flex-1 max-w-md mx-auto w-full px-4 pt-3 space-y-3">
         {syncNotice && (
@@ -323,7 +339,7 @@ export default function App() {
         <div className="bg-white border-2 border-emerald-300 rounded-2xl p-3 shadow-xs flex items-center justify-between">
           <div className="flex items-center space-x-2">
             {isOnline ? <Wifi className="w-4 h-4 text-emerald-600" /> : <WifiOff className="w-4 h-4 text-rose-500" />}
-            <span className="text-xs font-black text-emerald-950">{isOnline ? 'Online - Whisper V3 Active' : 'Offline'}</span>
+            <span className="text-xs font-black text-emerald-950">{isOnline ? 'Online - Local Speech' : 'Offline'}</span>
           </div>
           <a href={DRIVE_FOLDER_URL} target="_blank" rel="noopener noreferrer" className="text-[11px] font-black text-emerald-700 underline flex items-center space-x-1"><span>Drive</span><ExternalLink className="w-3 h-3" /></a>
         </div>
@@ -348,35 +364,29 @@ export default function App() {
                 <Mic className="w-10 h-10" />
               </button>
             )}
-            {recordingState === 'recording' && (
+            {recordingState === 'listening' && (
               <button onClick={handleToggleRecording} className="w-20 h-20 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-lg shadow-rose-600/30 animate-pulse active:scale-95 transition-all">
                 <Square className="w-9 h-9 fill-current" />
               </button>
             )}
-            {recordingState === 'transcribing' && (
-              <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-violet-500 to-purple-600 text-white flex items-center justify-center shadow-lg shadow-violet-500/30">
-                <Loader2 className="w-9 h-9 animate-spin" />
-              </div>
-            )}
 
-            {recordingState === 'recording' && (
+            {recordingState === 'listening' && (
               <div className="flex items-center space-x-2 bg-rose-50 border border-rose-200 rounded-xl px-4 py-2">
                 <div className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
                 <span className="text-sm font-black text-rose-700 font-mono">{formatTimer(elapsed)}</span>
               </div>
             )}
 
-            {recordingState === 'transcribing' && (
-              <div className="flex items-center space-x-2 bg-violet-50 border border-violet-200 rounded-xl px-4 py-2">
-                <Loader2 className="w-3.5 h-3.5 text-violet-600 animate-spin" />
-                <span className="text-xs font-bold text-violet-700">Whisper is transcribing...</span>
+            {recordingState === 'listening' && liveInterim && (
+              <div className="w-full p-3 bg-blue-50 border border-blue-200 rounded-xl">
+                <p className="text-[10px] font-black text-blue-500 uppercase mb-1">Listening...</p>
+                <p className="text-sm text-blue-800 font-semibold leading-relaxed whitespace-pre-wrap">{liveInterim}</p>
               </div>
             )}
 
             <p className="text-[10px] text-slate-500 font-bold text-center">
-              {recordingState === 'idle' && !transcript && 'Tap mic to record audio'}
-              {recordingState === 'recording' && 'Recording... tap stop when done'}
-              {recordingState === 'transcribing' && 'Sending to NVIDIA Whisper V3'}
+              {recordingState === 'idle' && !transcript && 'Tap mic to start speech recognition'}
+              {recordingState === 'listening' && 'Listening... speak now, tap stop when done'}
               {recordingState === 'idle' && transcript && 'Transcription ready below'}
             </p>
           </div>
@@ -391,7 +401,7 @@ export default function App() {
             <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-xl">
               <div className="flex items-center space-x-1.5 mb-1.5">
                 <FileText className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="text-[10px] font-black text-slate-500 uppercase">Transcript (Whisper V3)</span>
+                <span className="text-[10px] font-black text-slate-500 uppercase">Transcript (Local STT)</span>
               </div>
               <p className="text-sm text-slate-800 font-semibold leading-relaxed whitespace-pre-wrap">{transcript}</p>
               <div className="mt-2 flex items-center space-x-2">
@@ -507,7 +517,7 @@ export default function App() {
             <div className="flex items-center space-x-2">
               <Settings className="w-4 h-4 text-slate-500" />
               <span className="text-xs font-black text-slate-700">Settings</span>
-              <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">Whisper V3</span>
+              <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">Local STT</span>
             </div>
             {showSettings ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
           </button>
