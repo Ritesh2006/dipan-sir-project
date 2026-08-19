@@ -1,27 +1,28 @@
 import React, { useState } from 'react';
-import { Mic, ShieldCheck, Download, Award, CheckCircle2, Wifi, Settings } from 'lucide-react';
+import { ShieldCheck, Download, Award, CheckCircle2, Wifi, WifiOff } from 'lucide-react';
 
-export default function HeaderBar({ status, onExportExcel, serverIp, onServerIpChange }) {
+export default function HeaderBar({ status, onExportExcel, serverIp, onServerIpChange, isOnline, speechEngine }) {
   const [showIpConfig, setShowIpConfig] = useState(false);
-  const [inputIp, setInputIp] = useState(serverIp || '172.28.36.209');
+  const [inputIp, setInputIp] = useState(serverIp || '');
 
   const getStatusBadge = () => {
     switch (status) {
       case 'Listening':
       case 'Listening (Native Offline)':
-        return <span className="px-3 py-1 text-xs font-extrabold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 animate-pulse">● Listening</span>;
+        return <span className="px-3 py-1 text-xs font-extrabold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 animate-pulse">Listening</span>;
       case 'Processing':
-        return <span className="px-3 py-1 text-xs font-extrabold rounded-full bg-sky-100 text-sky-800 border border-sky-300">● Processing...</span>;
+        return <span className="px-3 py-1 text-xs font-extrabold rounded-full bg-sky-100 text-sky-800 border border-sky-300">Processing...</span>;
       case 'Saved':
       case 'Saved Offline & Ready':
+      case 'Saved Offline':
         return <span className="px-3 py-1 text-xs font-extrabold rounded-full bg-emerald-600 text-white border border-emerald-700 flex items-center space-x-1 shadow-sm">
           <CheckCircle2 className="w-3 h-3 text-white" />
-          <span>Saved ✓</span>
+          <span>Saved</span>
         </span>;
       case 'Error':
-        return <span className="px-3 py-1 text-xs font-extrabold rounded-full bg-rose-100 text-rose-800 border border-rose-300">⚠ Error</span>;
+        return <span className="px-3 py-1 text-xs font-extrabold rounded-full bg-rose-100 text-rose-800 border border-rose-300">Error</span>;
       default:
-        return <span className="px-3 py-1 text-xs font-extrabold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">● Ready</span>;
+        return <span className="px-3 py-1 text-xs font-extrabold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">Ready</span>;
     }
   };
 
@@ -49,6 +50,15 @@ export default function HeaderBar({ status, onExportExcel, serverIp, onServerIpC
           </div>
         </div>
         <div className="flex items-center space-x-1.5">
+          <div className={`flex items-center space-x-1 px-2 py-1 rounded-lg text-[9px] font-black border ${isOnline ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+            {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+            <span>{isOnline ? 'ONLINE' : 'OFFLINE'}</span>
+          </div>
+          {speechEngine && (
+            <div className={`px-1.5 py-1 rounded-lg text-[9px] font-black border ${speechEngine.includes('Vosk') ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : speechEngine.includes('Native') ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+              {speechEngine}
+            </div>
+          )}
           {getStatusBadge()}
           <button
             onClick={() => setShowIpConfig(!showIpConfig)}
@@ -69,19 +79,16 @@ export default function HeaderBar({ status, onExportExcel, serverIp, onServerIpC
 
       {showIpConfig && (
         <form onSubmit={handleSaveIp} className="mt-2.5 p-2 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center space-x-2 shadow-xs">
-          <span className="text-[10px] font-black text-emerald-950 flex-shrink-0">SERVER IP:</span>
+          <span className="text-[10px] font-black text-emerald-950 flex-shrink-0">SERVER:</span>
           <input
             type="text"
             value={inputIp}
             onChange={(e) => setInputIp(e.target.value)}
-            placeholder="172.28.36.209"
+            placeholder="exhibition-voice-logger-backend.onrender.com"
             className="flex-1 bg-white border border-emerald-300 rounded-lg px-2 py-1 text-xs font-mono text-slate-800 focus:outline-none focus:border-emerald-600"
           />
-          <button
-            type="submit"
-            className="px-3 py-1 bg-emerald-600 text-white text-[11px] font-black rounded-lg hover:bg-emerald-700"
-          >
-            Save IP
+          <button type="submit" className="px-3 py-1 bg-emerald-600 text-white text-[11px] font-black rounded-lg hover:bg-emerald-700">
+            Save
           </button>
         </form>
       )}

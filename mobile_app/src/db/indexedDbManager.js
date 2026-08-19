@@ -1,5 +1,5 @@
 const DB_NAME = 'VoiceLoggerDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'logs';
 
 export function openDB() {
@@ -24,6 +24,17 @@ export async function saveRecordToDB(record) {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     const req = store.add(record);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function updateRecordToDB(record) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.put(record);
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
