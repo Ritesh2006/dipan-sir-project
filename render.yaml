@@ -11,3 +11,5 @@ services:
         value: 1aaD44uttnMpWdLo19tko-8Ipl3_MUhbk
       - key: GOOGLE_APPS_SCRIPT_URL
         value: https://script.google.com/macros/s/AKfycbwzV4dCMkXfNYM2bxGHMe1l_I5n72-GMfccyAuyoEhSq_cYGnhVjU3Ql-PNOxStNyEs/exec
+      - key: NVIDIA_API_KEY
+        sync: false

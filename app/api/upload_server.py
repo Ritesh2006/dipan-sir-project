@@ -5,6 +5,8 @@ import json
 import base64
 import os
 import sys
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -34,7 +36,102 @@ class UploadRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
 
+    def do_GET(self):
+        if self.path == '/health' or self.path == '/api/health':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def do_POST(self):
+        if self.path == '/api/transcribe':
+            try:
+                content_type = self.headers.get('Content-Type', '')
+                content_length = int(self.headers.get('Content-Length', 0))
+                body_bytes = self.rfile.read(content_length)
+
+                payload = json.loads(body_bytes.decode('utf-8'))
+                audio_b64 = payload.get('audio_base64', '')
+                language = payload.get('language', 'multi')
+                model = payload.get('model', 'nvidia/whisper-large-v3')
+                api_key = payload.get('api_key', os.environ.get('NVIDIA_API_KEY', ''))
+
+                if not api_key:
+                    api_key = os.environ.get('NVIDIA_API_KEY', '')
+
+                if not audio_b64:
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "No audio provided"}).encode('utf-8'))
+                    return
+
+                if audio_b64.startswith('data:'):
+                    audio_b64 = audio_b64.split(',', 1)[1]
+                audio_bytes = base64.b64decode(audio_b64)
+
+                nim_url = 'https://integrate.api.nvidia.com/v1/audio/transcriptions'
+                boundary = '----VoiceLoggerBoundary2026'
+                form_data = (
+                    f'--{boundary}\r\n'
+                    f'Content-Disposition: form-data; name="file"; filename="recording.wav"\r\n'
+                    f'Content-Type: audio/wav\r\n\r\n'
+                ).encode('utf-8') + audio_bytes + (
+                    f'\r\n--{boundary}\r\n'
+                    f'Content-Disposition: form-data; name="model"\r\n\r\n{model}\r\n'
+                    f'--{boundary}\r\n'
+                    f'Content-Disposition: form-data; name="language"\r\n\r\n{language}\r\n'
+                    f'--{boundary}\r\n'
+                    f'Content-Disposition: form-data; name="response_format"\r\n\r\njson\r\n'
+                    f'--{boundary}--\r\n'
+                ).encode('utf-8')
+
+                req = urllib.request.Request(
+                    nim_url,
+                    data=form_data,
+                    headers={
+                        'Authorization': f'Bearer {api_key}',
+                        'Content-Type': f'multipart/form-data; boundary={boundary}',
+                    },
+                    method='POST'
+                )
+
+                try:
+                    with urllib.request.urlopen(req, timeout=30) as nim_resp:
+                        nim_result = json.loads(nim_resp.read().decode('utf-8'))
+                except urllib.error.HTTPError as nim_err:
+                    err_body = nim_err.read().decode('utf-8', errors='replace')
+                    logger.error(f"NVIDIA NIM API error {nim_err.code}: {err_body}")
+                    self.send_response(502)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "error": f"NVIDIA API error ({nim_err.code})",
+                        "detail": err_body
+                    }).encode('utf-8'))
+                    return
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(nim_result).encode('utf-8'))
+                logger.info(f"Transcription complete: {nim_result.get('text', '')[:100]}")
+            except Exception as e:
+                logger.error(f"Transcribe endpoint error: {e}")
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            return
+
         if self.path == '/api/upload':
             try:
                 content_length = int(self.headers.get('Content-Length', 0))
