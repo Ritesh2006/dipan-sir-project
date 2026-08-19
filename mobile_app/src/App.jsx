@@ -276,7 +276,16 @@ export default function App() {
             setLiveInterim(interimText);
           },
           (err) => {
-            setTranscribeError(err.message || 'Speech recognition failed');
+            const msg = err.message || '';
+            if (msg.includes('CLIENT_ERROR') || msg.includes('BUSY')) {
+              setTranscribeError('Mic busy, retrying...');
+              setTimeout(() => {
+                setTranscribeError('');
+                handleToggleRecording();
+              }, 1000);
+              return;
+            }
+            setTranscribeError(msg || 'Speech recognition failed');
             setRecordingState('idle');
             clearInterval(timerRef.current);
             setStatus('Error');

@@ -15,20 +15,25 @@ const LANG_MAP = {
 let listeners = [];
 let isListeningFlag = false;
 let currentLanguage = 'hi-IN';
+let retryCount = 0;
+const MAX_RETRIES = 3;
 
 export async function startListening(language = 'auto', onResult, onInterim, onError, onEnd) {
   if (isListeningFlag) {
     await stopListening();
+    await new Promise(r => setTimeout(r, 400));
   }
 
   const lang = LANG_MAP[language] || 'hi-IN';
   currentLanguage = lang;
   isListeningFlag = true;
+  retryCount = 0;
 
   if (Capacitor.isNativePlatform()) {
     try {
       const resultListener = await NativeSpeech.addListener('onSpeechResult', (data) => {
         if (data && data.transcript) {
+          retryCount = 0;
           if (data.isFinal) {
             if (onResult) onResult(data.transcript);
           } else {
@@ -37,14 +42,30 @@ export async function startListening(language = 'auto', onResult, onInterim, onE
         }
       });
 
-      const errorListener = await NativeSpeech.addListener('onSpeechError', (err) => {
+      const errorListener = await NativeSpeech.addListener('onSpeechError', async (err) => {
+        if (err.isRetryable && retryCount < MAX_RETRIES) {
+          retryCount++;
+          try {
+            await NativeSpeech.stopListening();
+            await new Promise(r => setTimeout(r, 500));
+            await NativeSpeech.startListening({
+              language: lang === 'auto' ? 'hi-IN' : lang,
+              autoDetect: lang === 'auto',
+              continuous: false,
+            });
+          } catch (e) {
+            isListeningFlag = false;
+            if (onError) onError(new Error(err.errorName || 'Speech error'));
+          }
+          return;
+        }
         isListeningFlag = false;
         if (onError) onError(new Error(err.errorName || 'Speech error'));
       });
 
       const stateListener = await NativeSpeech.addListener('onSpeechState', (data) => {
         if (data && data.status === 'ready') {
-          if (onEnd) onEnd('');
+          retryCount = 0;
         }
       });
 
@@ -115,11 +136,13 @@ export async function startListening(language = 'auto', onResult, onInterim, onE
 
 export async function stopListening() {
   isListeningFlag = false;
+  retryCount = 0;
 
   if (Capacitor.isNativePlatform()) {
     try {
       await NativeSpeech.stopListening();
     } catch (e) {}
+    await new Promise(r => setTimeout(r, 200));
   }
 
   listeners.forEach(l => {
