@@ -16,7 +16,16 @@ let listeners = [];
 let isListeningFlag = false;
 let currentLanguage = 'hi-IN';
 let retryCount = 0;
-const MAX_RETRIES = 3;
+let sessionTimer = null;
+let sessionStartTime = 0;
+let accumulatedTranscript = '';
+let onSessionResult = null;
+let onSessionInterim = null;
+let onSessionError = null;
+let onSessionEnd = null;
+
+const MAX_SESSION_MS = 30 * 60 * 1000;
+const SESSION_RESTART_INTERVAL = 55 * 1000;
 
 export async function startListening(language = 'auto', onResult, onInterim, onError, onEnd) {
   if (isListeningFlag) {
@@ -28,6 +37,12 @@ export async function startListening(language = 'auto', onResult, onInterim, onE
   currentLanguage = lang;
   isListeningFlag = true;
   retryCount = 0;
+  accumulatedTranscript = '';
+  sessionStartTime = Date.now();
+  onSessionResult = onResult;
+  onSessionInterim = onInterim;
+  onSessionError = onError;
+  onSessionEnd = onEnd;
 
   if (Capacitor.isNativePlatform()) {
     try {
@@ -35,32 +50,47 @@ export async function startListening(language = 'auto', onResult, onInterim, onE
         if (data && data.transcript) {
           retryCount = 0;
           if (data.isFinal) {
-            if (onResult) onResult(data.transcript);
+            accumulatedTranscript += data.transcript + ' ';
+            if (onSessionResult) onSessionResult(accumulatedTranscript.trim());
           } else {
-            if (onInterim) onInterim(data.transcript);
+            if (onSessionInterim) onSessionInterim(accumulatedTranscript.trim() + data.transcript);
           }
         }
       });
 
       const errorListener = await NativeSpeech.addListener('onSpeechError', async (err) => {
-        if (err.isRetryable && retryCount < MAX_RETRIES) {
+        if (!isListeningFlag) return;
+
+        if (err.isRetryable && retryCount < 5) {
           retryCount++;
           try {
             await NativeSpeech.stopListening();
-            await new Promise(r => setTimeout(r, 500));
-            await NativeSpeech.startListening({
-              language: lang === 'auto' ? 'hi-IN' : lang,
-              autoDetect: lang === 'auto',
-              continuous: false,
-            });
+            await new Promise(r => setTimeout(r, 600));
+            if (isListeningFlag) {
+              await NativeSpeech.startListening({
+                language: lang === 'auto' ? 'hi-IN' : lang,
+                autoDetect: lang === 'auto',
+                continuous: true,
+              });
+            }
           } catch (e) {
             isListeningFlag = false;
-            if (onError) onError(new Error(err.errorName || 'Speech error'));
+            clearSessionTimer();
+            if (onSessionError) onSessionError(new Error(err.errorName || 'Speech error'));
           }
           return;
         }
+
+        if (err.errorName === 'NO_MATCH' || err.errorName === 'SPEECH_TIMEOUT') {
+          if (isListeningFlag) {
+            await restartSession();
+          }
+          return;
+        }
+
         isListeningFlag = false;
-        if (onError) onError(new Error(err.errorName || 'Speech error'));
+        clearSessionTimer();
+        if (onSessionError) onSessionError(new Error(err.errorName || 'Speech error'));
       });
 
       const stateListener = await NativeSpeech.addListener('onSpeechState', (data) => {
@@ -74,18 +104,19 @@ export async function startListening(language = 'auto', onResult, onInterim, onE
       await NativeSpeech.startListening({
         language: lang === 'auto' ? 'hi-IN' : lang,
         autoDetect: lang === 'auto',
-        continuous: false,
+        continuous: true,
       });
+
+      startSessionTimer();
     } catch (err) {
       isListeningFlag = false;
-      if (onError) onError(err);
+      if (onSessionError) onSessionError(err);
     }
   } else {
-    // Fallback: Web Speech API for browser
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       isListeningFlag = false;
-      if (onError) onError(new Error('Speech recognition not supported'));
+      if (onSessionError) onSessionError(new Error('Speech recognition not supported'));
       return;
     }
 
@@ -98,45 +129,87 @@ export async function startListening(language = 'auto', onResult, onInterim, onE
       recognition.lang = lang;
     }
 
-    let finalText = '';
-
     recognition.onresult = (event) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const t = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalText += t + ' ';
-          if (onResult) onResult(finalText.trim());
+          accumulatedTranscript += t + ' ';
+          if (onSessionResult) onSessionResult(accumulatedTranscript.trim());
         } else {
           interim += t;
-          if (onInterim) onInterim(finalText.trim() + interim);
+          if (onSessionInterim) onSessionInterim(accumulatedTranscript.trim() + interim);
         }
       }
     };
 
     recognition.onerror = (event) => {
-      isListeningFlag = false;
-      if (event.error === 'no-speech') return;
-      if (onError) onError(new Error(`Speech error: ${event.error}`));
+      if (event.error === 'no-speech' || event.error === 'aborted') return;
+      if (onSessionError) onSessionError(new Error(`Speech error: ${event.error}`));
     };
 
     recognition.onend = () => {
-      isListeningFlag = false;
-      if (onEnd) onEnd(finalText.trim());
+      if (isListeningFlag) {
+        try { recognition.start(); } catch {}
+      }
     };
 
     try {
       recognition.start();
+      startSessionTimer();
     } catch (err) {
       isListeningFlag = false;
-      if (onError) onError(err);
+      if (onSessionError) onSessionError(err);
     }
+  }
+}
+
+async function restartSession() {
+  if (!isListeningFlag) return;
+  try {
+    await NativeSpeech.stopListening();
+    await new Promise(r => setTimeout(r, 500));
+    if (isListeningFlag) {
+      await NativeSpeech.startListening({
+        language: currentLanguage === 'auto' ? 'hi-IN' : currentLanguage,
+        autoDetect: currentLanguage === 'auto',
+        continuous: true,
+      });
+    }
+  } catch (e) {
+    if (isListeningFlag) {
+      setTimeout(() => restartSession(), 1000);
+    }
+  }
+}
+
+function startSessionTimer() {
+  clearSessionTimer();
+  const remaining = MAX_SESSION_MS - (Date.now() - sessionStartTime);
+
+  if (remaining <= 0) {
+    stopListening();
+    if (onSessionEnd) onSessionEnd(accumulatedTranscript.trim());
+    return;
+  }
+
+  sessionTimer = setTimeout(() => {
+    stopListening();
+    if (onSessionEnd) onSessionEnd(accumulatedTranscript.trim());
+  }, remaining);
+}
+
+function clearSessionTimer() {
+  if (sessionTimer) {
+    clearTimeout(sessionTimer);
+    sessionTimer = null;
   }
 }
 
 export async function stopListening() {
   isListeningFlag = false;
   retryCount = 0;
+  clearSessionTimer();
 
   if (Capacitor.isNativePlatform()) {
     try {
@@ -155,8 +228,24 @@ export function isCurrentlyListening() {
   return isListeningFlag;
 }
 
+export function getElapsedSeconds() {
+  if (!isListeningFlag) return 0;
+  return Math.floor((Date.now() - sessionStartTime) / 1000);
+}
+
+export function getRemainingSeconds() {
+  if (!isListeningFlag) return 0;
+  const remaining = MAX_SESSION_MS - (Date.now() - sessionStartTime);
+  return Math.max(0, Math.floor(remaining / 1000));
+}
+
+export function getAccumulatedTranscript() {
+  return accumulatedTranscript.trim();
+}
+
 export async function abortListening() {
   isListeningFlag = false;
+  clearSessionTimer();
   await stopListening();
 }
 

@@ -8,7 +8,7 @@ import {
   getTranscriptionsByTab, getNextCounter, clearAllTranscriptions, autoLogPhrase
 } from './db/offlineSheetManager';
 import { processTranscript, formatTranscriptForSheet } from './nlp/transcriptProcessor';
-import { startListening, stopListening, abortListening, isCurrentlyListening, checkAvailability } from './speech/speechRecognition';
+import { startListening, stopListening, abortListening, isCurrentlyListening, getRemainingSeconds } from './speech/speechRecognition';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 import { Mic, Square, Upload, FileText, Camera, ExternalLink, X, Radio, WifiOff, Wifi, FileSpreadsheet, Clock, Settings, ChevronDown, ChevronUp, Keyboard } from 'lucide-react';
@@ -253,8 +253,7 @@ export default function App() {
       await stopListening();
       setRecordingState('idle');
       setLiveInterim('');
-      const finalText = transcript;
-      if (finalText) {
+      if (transcript) {
         setStatus('Transcription complete');
       } else {
         setTranscribeError('No speech detected. Try again.');
@@ -269,7 +268,7 @@ export default function App() {
         await startListening(
           speechLang,
           (finalText) => {
-            setTranscript(processTranscript(finalText));
+            setTranscript(finalText);
             setLiveInterim('');
           },
           (interimText) => {
@@ -291,22 +290,25 @@ export default function App() {
             setStatus('Error');
           },
           (finalText) => {
-            if (recordingState === 'listening') {
-              setRecordingState('idle');
-              clearInterval(timerRef.current);
-              setLiveInterim('');
-              if (finalText) {
-                setTranscript(processTranscript(finalText));
-                setStatus('Transcription complete');
-              }
+            setRecordingState('idle');
+            clearInterval(timerRef.current);
+            setLiveInterim('');
+            if (finalText) {
+              setTranscript(finalText);
+              setStatus('30 min session complete');
             }
           }
         );
         setRecordingState('listening');
-        setStatus('Listening...');
+        setStatus('Listening... (30 min session)');
         const start = Date.now();
         timerRef.current = setInterval(() => {
-          setElapsed(Math.floor((Date.now() - start) / 1000));
+          const elapsedSec = Math.floor((Date.now() - start) / 1000);
+          setElapsed(elapsedSec);
+          const remaining = 1800 - elapsedSec;
+          if (remaining <= 0) {
+            clearInterval(timerRef.current);
+          }
         }, 200);
       } catch (err) {
         setTranscribeError(err.message || 'Speech recognition not available');
@@ -472,6 +474,9 @@ export default function App() {
               <div className="flex items-center space-x-2 bg-rose-50 border border-rose-200 rounded-xl px-4 py-2">
                 <div className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
                 <span className="text-sm font-black text-rose-700 font-mono">{formatTimer(elapsed)}</span>
+                <span className="text-[10px] font-bold text-slate-400">/</span>
+                <span className="text-[10px] font-bold text-emerald-600">{formatTimer(Math.max(0, 1800 - elapsed))}</span>
+                <span className="text-[9px] font-bold text-slate-400">remaining</span>
               </div>
             )}
 
@@ -483,8 +488,8 @@ export default function App() {
             )}
 
             <p className="text-[10px] text-slate-500 font-bold text-center">
-              {recordingState === 'idle' && !transcript && 'Tap mic or say "RUBY" to start'}
-              {recordingState === 'listening' && 'Listening... speak now, tap stop when done'}
+              {recordingState === 'idle' && !transcript && 'Tap mic or say "RUBY" to start (30 min session)'}
+              {recordingState === 'listening' && 'Listening... speak freely, auto-restarts every 60s'}
               {recordingState === 'idle' && transcript && 'Transcription ready below'}
             </p>
           </div>
