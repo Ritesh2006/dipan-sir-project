@@ -50,18 +50,12 @@ class UploadRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == '/api/transcribe':
             try:
-                content_type = self.headers.get('Content-Type', '')
                 content_length = int(self.headers.get('Content-Length', 0))
                 body_bytes = self.rfile.read(content_length)
-
                 payload = json.loads(body_bytes.decode('utf-8'))
-                audio_b64 = payload.get('audio_base64', '')
-                language = payload.get('language', 'multi')
-                model = payload.get('model', 'nvidia/whisper-large-v3')
-                api_key = payload.get('api_key', os.environ.get('NVIDIA_API_KEY', ''))
 
-                if not api_key:
-                    api_key = os.environ.get('NVIDIA_API_KEY', '')
+                audio_b64 = payload.get('audio_base64', '')
+                language = payload.get('language', 'auto')
 
                 if not audio_b64:
                     self.send_response(400)
@@ -75,54 +69,38 @@ class UploadRequestHandler(BaseHTTPRequestHandler):
                     audio_b64 = audio_b64.split(',', 1)[1]
                 audio_bytes = base64.b64decode(audio_b64)
 
-                nim_url = 'https://integrate.api.nvidia.com/v1/audio/transcriptions'
-                boundary = '----VoiceLoggerBoundary2026'
-                form_data = (
-                    f'--{boundary}\r\n'
-                    f'Content-Disposition: form-data; name="file"; filename="recording.wav"\r\n'
-                    f'Content-Type: audio/wav\r\n\r\n'
-                ).encode('utf-8') + audio_bytes + (
-                    f'\r\n--{boundary}\r\n'
-                    f'Content-Disposition: form-data; name="model"\r\n\r\n{model}\r\n'
-                    f'--{boundary}\r\n'
-                    f'Content-Disposition: form-data; name="language"\r\n\r\n{language}\r\n'
-                    f'--{boundary}\r\n'
-                    f'Content-Disposition: form-data; name="response_format"\r\n\r\njson\r\n'
-                    f'--{boundary}--\r\n'
-                ).encode('utf-8')
+                audio_path = UPLOAD_DIR / "temp_transcribe.wav"
+                audio_path.write_bytes(audio_bytes)
 
-                req = urllib.request.Request(
-                    nim_url,
-                    data=form_data,
-                    headers={
-                        'Authorization': f'Bearer {api_key}',
-                        'Content-Type': f'multipart/form-data; boundary={boundary}',
-                    },
-                    method='POST'
-                )
+                lang_code = None if language in ('auto', 'multi') else language.split('-')[0]
+                from app.speech.whisper_engine import WhisperEngine
+                stt = WhisperEngine(language=lang_code)
+                result = stt.transcribe(audio_path)
 
                 try:
-                    with urllib.request.urlopen(req, timeout=30) as nim_resp:
-                        nim_result = json.loads(nim_resp.read().decode('utf-8'))
-                except urllib.error.HTTPError as nim_err:
-                    err_body = nim_err.read().decode('utf-8', errors='replace')
-                    logger.error(f"NVIDIA NIM API error {nim_err.code}: {err_body}")
-                    self.send_response(502)
+                    audio_path.unlink()
+                except Exception:
+                    pass
+
+                if result.get("success"):
+                    self.send_response(200)
                     self.send_header('Content-Type', 'application/json')
                     self.send_header('Access-Control-Allow-Origin', '*')
                     self.end_headers()
                     self.wfile.write(json.dumps({
-                        "error": f"NVIDIA API error ({nim_err.code})",
-                        "detail": err_body
+                        "text": result["text"],
+                        "language": result.get("language", language),
+                        "confidence": result.get("confidence", 0.0),
                     }).encode('utf-8'))
-                    return
-
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps(nim_result).encode('utf-8'))
-                logger.info(f"Transcription complete: {nim_result.get('text', '')[:100]}")
+                    logger.info(f"Transcription: '{result['text'][:100]}'")
+                else:
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "error": result.get("error", "Transcription failed")
+                    }).encode('utf-8'))
             except Exception as e:
                 logger.error(f"Transcribe endpoint error: {e}")
                 self.send_response(500)
