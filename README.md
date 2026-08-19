@@ -14,7 +14,7 @@ The mobile system includes a **100% Offline Progressive Web App (PWA)** and **Na
 - **IndexedDB Storage:** Persists offline log history directly on your phone.
 
 ### 📲 Mobile Installation:
-1. **Automated Mobile Build Script:**
+1. **Automated Mobile Build Script:**          
    ```bash
    ./scripts/build_mobile_app.py
    ```

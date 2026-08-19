@@ -5,7 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="213478b0-6ce3-414a-bd7c-fe7af07fe62e" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/drive_uploads/1aaD44uttnMpWdLo19tko-8Ipl3_MUhbk/Stalls/STALL-999/Stall_STALL-999_Test_Stall_Photo_999.jpg" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/test_img.jpg" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/api/upload_server.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/api/upload_server.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/database/repository.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/database/repository.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/mobile_app/src/App.jsx" beforeDir="false" afterPath="$PROJECT_DIR$/mobile_app/src/App.jsx" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
